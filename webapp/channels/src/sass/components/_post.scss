@@ -2231,6 +2231,11 @@
 }
 
 .post.current--user {
+    .post__content {
+        display: flex;
+        justify-content: flex-end;
+    }
+
     &.other--root,
     &.post--root {
         .post__header-set-custom-status {
