@@ -159,6 +159,9 @@ func updateConfig(c *Context, w http.ResponseWriter, r *http.Request) {
 	// modifications to the slice.
 	cfg.PluginSettings.SignaturePublicKeyFiles = appCfg.PluginSettings.SignaturePublicKeyFiles
 
+	// Do not allow import directory to be changed through the API
+	*cfg.ImportSettings.Directory = *appCfg.ImportSettings.Directory
+
 	// Do not allow marketplace URL to be toggled through the API if EnableUploads are disabled.
 	if cfg.PluginSettings.EnableUploads != nil && !*appCfg.PluginSettings.EnableUploads {
 		*cfg.PluginSettings.MarketplaceURL = *appCfg.PluginSettings.MarketplaceURL
@@ -305,6 +308,12 @@ func patchConfig(c *Context, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Do not allow import directory to be changed through the API
+	if cfg.ImportSettings.Directory != nil && *cfg.ImportSettings.Directory != *appCfg.ImportSettings.Directory {
+		c.Err = model.NewAppError("patchConfig", "api.config.update_config.not_allowed_security.app_error", map[string]any{"Name": "ImportSettings.Directory"}, "", http.StatusForbidden)
+		return
+	}
+
 	// Do not allow marketplace URL to be toggled if plugin uploads are disabled.
 	if cfg.PluginSettings.MarketplaceURL != nil && cfg.PluginSettings.EnableUploads != nil {
 		// Breaking it down to 2 conditions to make it simple.
@@ -324,6 +333,15 @@ func patchConfig(c *Context, w http.ResponseWriter, r *http.Request) {
 
 	if cfg.MessageExportSettings.EnableExport != nil {
 		c.App.HandleMessageExportConfig(cfg, appCfg)
+	}
+
+	// Preserve the existing configs for those not present in the patch.
+	if cfg.PluginSettings.Plugins != nil {
+		for id, storedSettings := range appCfg.PluginSettings.Plugins {
+			if _, present := cfg.PluginSettings.Plugins[id]; !present {
+				cfg.PluginSettings.Plugins[id] = storedSettings
+			}
+		}
 	}
 
 	updatedCfg, err := config.Merge(appCfg, cfg, &utils.MergeConfig{

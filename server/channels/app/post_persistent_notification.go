@@ -163,14 +163,38 @@ func (a *App) forEachPersistentNotificationPost(posts []*model.Post, fn func(pos
 		return err
 	}
 
+	var postsForPersistentNotificationCleanup []*model.Post
+
 	for _, post := range posts {
 		channel := channelsMap[post.ChannelId]
+		if channel == nil {
+			postsForPersistentNotificationCleanup = append(postsForPersistentNotificationCleanup, post)
+			continue
+		}
+
 		team := teamsMap[channel.TeamId]
 		// GMs and DMs don't belong to any team
 		if channel.IsGroupOrDirect() {
 			team = &model.Team{}
+		} else if team == nil {
+			// cleanup persistent notification for posts with missing teams when they are not DM or GM
+			postsForPersistentNotificationCleanup = append(postsForPersistentNotificationCleanup, post)
+			continue
 		}
+
 		profileMap := channelProfileMap[channel.Id]
+
+		// Ensure the sender is always in the profile map: for example, system admins can post
+		// without being a member.
+		if _, ok := profileMap[post.UserId]; !ok {
+			var sender *model.User
+			sender, err = a.Srv().Store().User().Get(context.Background(), post.UserId)
+			if err != nil {
+				return errors.Wrapf(err, "failed to get profile for sender user %s for post %s", post.UserId, post.Id)
+			}
+
+			profileMap[post.UserId] = sender
+		}
 
 		mentions := &MentionResults{}
 		// In DMs, only the "other" user can be mentioned
@@ -198,6 +222,14 @@ func (a *App) forEachPersistentNotificationPost(posts []*model.Post, fn func(pos
 		}
 	}
 
+	if len(postsForPersistentNotificationCleanup) > 0 {
+		for _, post := range postsForPersistentNotificationCleanup {
+			if appErr := a.DeletePersistentNotification(request.EmptyContext(a.Log()), post); appErr != nil {
+				a.Log().Warn("Failed to delete persistent notification for post", mlog.String("post_id", post.Id), mlog.String("channel_id", post.ChannelId), mlog.Err(appErr))
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -207,9 +239,14 @@ func (a *App) persistentNotificationsAuxiliaryData(channelsMap map[string]*model
 	channelKeywords := make(map[string]MentionKeywords, len(channelsMap))
 	channelNotifyProps := make(map[string]map[string]model.StringMap, len(channelsMap))
 	for _, c := range channelsMap {
+		team := teamsMap[c.TeamId]
+		if team == nil && !c.IsGroupOrDirect() {
+			continue
+		}
+
 		// In DM, notifications can't be send to any 3rd person.
 		if c.Type != model.ChannelTypeDirect {
-			groups, err := a.getGroupsAllowedForReferenceInChannel(c, teamsMap[c.TeamId])
+			groups, err := a.getGroupsAllowedForReferenceInChannel(c, team)
 			if err != nil {
 				return nil, nil, nil, nil, errors.Wrapf(err, "failed to get profiles for channel %s", c.Id)
 			}
@@ -228,15 +265,12 @@ func (a *App) persistentNotificationsAuxiliaryData(channelsMap map[string]*model
 		}
 
 		channelKeywords[c.Id] = make(MentionKeywords, len(profileMap))
-		validProfileMap := make(map[string]*model.User, len(profileMap))
 		for userID, user := range profileMap {
-			if user.IsBot {
-				continue
+			if !user.IsBot {
+				channelKeywords[c.Id].AddUserKeyword(userID, "@"+user.Username)
 			}
-			validProfileMap[userID] = user
-			channelKeywords[c.Id].AddUserKeyword(userID, "@"+user.Username)
 		}
-		channelProfileMap[c.Id] = validProfileMap
+		channelProfileMap[c.Id] = profileMap
 	}
 	return channelGroupMap, channelProfileMap, channelKeywords, channelNotifyProps, nil
 }
@@ -338,7 +372,7 @@ func (a *App) sendPersistentNotifications(post *model.Post, channel *model.Chann
 	}
 
 	if len(desktopUsers) != 0 {
-		post = a.PreparePostForClient(request.EmptyContext(a.Log()), post, false, false, true)
+		post = a.PreparePostForClient(request.EmptyContext(a.Log()), post, &model.PreparePostForClientOpts{IncludePriority: true})
 		postJSON, jsonErr := post.ToJSON()
 		if jsonErr != nil {
 			return errors.Wrapf(jsonErr, "failed to encode post to JSON")
@@ -354,7 +388,11 @@ func (a *App) sendPersistentNotifications(post *model.Post, channel *model.Chann
 			message.Add("sender_name", notification.GetSenderName(model.ShowUsername, *a.Config().ServiceSettings.EnablePostUsernameOverride))
 			message.Add("team_id", team.Id)
 
-			if len(post.FileIds) != 0 {
+			// otherFile/image are recipient-visible hints that a file is attached; gate them on
+			// the same per-recipient ABAC download_file_attachment check the "post" field's
+			// own file metadata is stripped by (via setupBroadcastHookForAbacFiles below), so a
+			// denied recipient doesn't learn a file exists (or that it's an image) here either.
+			if len(post.FileIds) != 0 && a.hasFileAttachmentAccess(request.EmptyContext(a.Log()), u, post.ChannelId) {
 				message.Add("otherFile", "true")
 
 				infos, err := a.Srv().Store().FileInfo().GetForPost(post.Id, false, false, true)
@@ -371,6 +409,7 @@ func (a *App) sendPersistentNotifications(post *model.Post, channel *model.Chann
 			}
 
 			message.Add("mentions", model.ArrayToJSON(desktopUsers))
+			a.setupBroadcastHookForAbacFiles(post, message)
 			a.Publish(message)
 		}
 	}

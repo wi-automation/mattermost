@@ -1,12 +1,12 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-import type {AppForm, AppField, AppFormValue, AppSelectOption, AppFormValues} from '@mattermost/types/apps';
+import {isAppSelectOption, type AppForm, type AppField, type AppFormValue, type AppSelectOption, type AppFormValues} from '@mattermost/types/apps';
 import type {DialogElement} from '@mattermost/types/integrations';
 
 import {AppFieldTypes} from 'mattermost-redux/constants/apps';
 
-import {escapeHtml} from 'utils/text_formatting';
+import {stringToMoment} from 'utils/date_utils';
 
 // Dialog element types (from legacy Interactive Dialog spec)
 export const DialogElementTypes = {
@@ -15,6 +15,8 @@ export const DialogElementTypes = {
     SELECT: 'select',
     BOOL: 'bool',
     RADIO: 'radio',
+    DATE: 'date',
+    DATETIME: 'datetime',
 } as const;
 
 // Dialog element length limits (server-side validation constraints)
@@ -39,12 +41,37 @@ export type ValidationError = {
     code: ValidationErrorCode;
 };
 
+// Server dialog response structure
+type ServerDialogResponse = {
+    elements?: DialogElement[];
+    title?: string;
+    introduction_text?: string;
+    icon_url?: string;
+    submit_label?: string;
+    source_url?: string;
+    callback_id?: string;
+    notify_on_cancel?: boolean;
+    state?: string;
+};
+
+// Transformed dialog props structure
+type TransformedDialogProps = {
+    elements?: DialogElement[];
+    title: string;
+    introductionText?: string;
+    iconUrl?: string;
+    submitLabel?: string;
+    sourceUrl?: string;
+    callbackId?: string;
+    notifyOnCancel?: boolean;
+    state?: string;
+};
+
 export type ConversionOptions = {
 
     // Enhanced mode enables stricter validation and error handling
     // When false: Legacy mode with minimal validation (backwards compatible)
     // When true: Enhanced mode with full validation and blocking errors
-    // TODO: Default to true in v11/v12 and eventually remove this option
     enhanced: boolean;
 };
 
@@ -52,13 +79,6 @@ export type ConversionResult = {
     form: AppForm;
     errors: ValidationError[];
 };
-
-/**
- * Sanitize string input to prevent XSS attacks (only for HTML content)
- */
-export function sanitizeString(input: unknown): string {
-    return escapeHtml(String(input));
-}
 
 /**
  * Validate individual dialog element (logs warnings but doesn't block)
@@ -207,6 +227,10 @@ export function getFieldType(element: DialogElement): string | null {
         return AppFieldTypes.BOOL;
     case DialogElementTypes.RADIO:
         return AppFieldTypes.RADIO;
+    case DialogElementTypes.DATE:
+        return AppFieldTypes.DATE;
+    case DialogElementTypes.DATETIME:
+        return AppFieldTypes.DATETIME;
     default:
         return null; // Skip unknown field types
     }
@@ -229,10 +253,28 @@ export function getDefaultValue(element: DialogElement): AppFormValue {
         return boolString === 'true' || boolString === '1' || boolString === 'yes';
     }
 
-    case DialogElementTypes.SELECT:
     case DialogElementTypes.RADIO: {
+        // Radio values are always plain strings (RadioSetting.onChange returns e.target.value).
+        // Normalize to string from the start so the value shape never changes after user interaction.
+        if (element.options && element.default) {
+            const match = element.options.find((opt) => opt.value === element.default);
+            return match ? match.value : null;
+        }
+        return element.default ? String(element.default) : null;
+    }
+
+    case DialogElementTypes.SELECT: {
         // Handle dynamic selects that use data_source instead of static options
-        if (element.type === 'select' && element.data_source === 'dynamic' && element.default) {
+        if (element.data_source === 'dynamic' && element.default) {
+            if (element.multiselect) {
+                const values = Array.isArray(element.default) ?
+                    element.default :
+                    String(element.default).split(',');
+                const normalizedValues = values.
+                    map((val) => String(val).trim()).
+                    filter((val) => val.length > 0);
+                return normalizedValues.length > 0 ? normalizedValues.map((v) => ({label: v, value: v})) : null;
+            }
             return {
                 label: String(element.default),
                 value: String(element.default),
@@ -241,10 +283,8 @@ export function getDefaultValue(element: DialogElement): AppFormValue {
 
         if (element.options && element.default) {
             // Handle multiselect defaults (comma-separated values)
-            if (element.type === 'select' && element.multiselect) {
-                const defaultValues = Array.isArray(element.default) ?
-                    element.default :
-                    String(element.default).split(',').map((val) => val.trim());
+            if (element.multiselect) {
+                const defaultValues = Array.isArray(element.default) ? element.default : String(element.default).split(',').map((val) => val.trim());
 
                 const defaultOptions = defaultValues.map((value) => {
                     const option = element.options!.find((opt) => opt.value === value);
@@ -276,6 +316,28 @@ export function getDefaultValue(element: DialogElement): AppFormValue {
     case DialogElementTypes.TEXTAREA: {
         const defaultValue = element.default ?? null;
         return defaultValue === null ? null : String(defaultValue);
+    }
+
+    case DialogElementTypes.DATE:
+    case DialogElementTypes.DATETIME: {
+        // Date and datetime values should be passed through as strings (ISO format)
+        const defaultValue = element.default;
+        if (defaultValue === null || defaultValue === undefined) {
+            return null;
+        }
+
+        // Validate the default value is a valid date/datetime string
+        const stringValue = String(defaultValue);
+
+        // If empty string, return it as-is
+        if (stringValue === '') {
+            return stringValue;
+        }
+
+        const testMoment = stringToMoment(stringValue);
+
+        // If invalid, return null instead of passing invalid data
+        return testMoment?.isValid() ? stringValue : null;
     }
 
     default:
@@ -379,9 +441,62 @@ export function convertElement(element: DialogElement, options: ConversionOption
                 expand: {},
             };
         }
+
+        // Copy refresh property for dynamic field updates
+        if (element.refresh !== undefined) {
+            appField.refresh = element.refresh;
+        }
+    }
+
+    // Add refresh support for bool fields
+    if (element.type === DialogElementTypes.BOOL) {
+        if (element.refresh !== undefined) {
+            appField.refresh = element.refresh;
+        }
+    }
+
+    // Add date/datetime specific properties
+    if (element.type === DialogElementTypes.DATE || element.type === DialogElementTypes.DATETIME) {
+        // Use datetime_config if provided
+        if (element.datetime_config) {
+            appField.datetime_config = element.datetime_config;
+        }
+
+        // Simple fallback fields (used when datetime_config is not provided)
+        if (element.min_date !== undefined) {
+            appField.min_date = String(element.min_date);
+        }
+        if (element.max_date !== undefined) {
+            appField.max_date = String(element.max_date);
+        }
+        if (element.time_interval !== undefined && element.type === DialogElementTypes.DATETIME) {
+            appField.time_interval = Number(element.time_interval);
+        }
+
+        if (element.refresh !== undefined) {
+            appField.refresh = element.refresh;
+        }
     }
 
     return {field: appField, errors};
+}
+
+/**
+ * Transform server dialog response format (snake_case) to props format (camelCase)
+ * Uses the same transformation pattern as mapStateToProps in interactive_dialog/index.tsx
+ */
+export function transformServerDialogToProps(serverDialog: ServerDialogResponse): TransformedDialogProps {
+    return {
+        elements: serverDialog.elements,
+        title: serverDialog.title || '',
+        introductionText: serverDialog.introduction_text,
+        iconUrl: serverDialog.icon_url,
+        submitLabel: serverDialog.submit_label,
+        sourceUrl: serverDialog.source_url,
+        callbackId: serverDialog.callback_id,
+        notifyOnCancel: serverDialog.notify_on_cancel,
+        state: serverDialog.state,
+    };
 }
 
 /**
@@ -393,10 +508,12 @@ export function convertDialogToAppForm(
     introductionText: string | undefined,
     iconUrl: string | undefined,
     submitLabel: string | undefined,
+    sourceUrl: string,
+    dialogState: string,
     options: ConversionOptions,
 ): ConversionResult {
-    const convertedFields: AppField[] = [];
     const allErrors: ValidationError[] = [];
+    const convertedFields: AppField[] = [];
 
     // Validate title if validation is enabled
     if (options.enhanced && !title?.trim()) {
@@ -444,16 +561,85 @@ export function convertDialogToAppForm(
     const form: AppForm = {
         title: String(title || ''),
         icon: iconUrl,
-        header: introductionText ? sanitizeString(introductionText) : undefined,
+        header: introductionText ? String(introductionText) : undefined,
         submit_label: submitLabel ? String(submitLabel) : undefined,
         submit: {
             path: '/submit',
             expand: {},
+            state: dialogState || undefined,
         },
         fields: convertedFields,
     };
 
+    // Set source if sourceUrl is provided or if any fields have refresh enabled
+    const hasRefreshFields = convertedFields.some((field) => field.refresh === true);
+    if ((sourceUrl && sourceUrl.trim()) || hasRefreshFields) {
+        form.source = {
+            path: sourceUrl || '/refresh',
+            expand: {},
+            state: dialogState || undefined,
+        };
+    }
+
     return {form, errors: allErrors};
+}
+
+/**
+ * Extract primitive values from form field objects for storage/submission
+ * Converts select option objects {label: "Text", value: "val"} to primitive "val"
+ * Filters out null, undefined, empty, and "<nil>" values unless clearEmptyFields is true,
+ * in which case empty/null fields are emitted as '' or [] so they can overwrite prior values.
+ */
+export function extractPrimitiveValues(values: Record<string, any>, clearEmptyFields = false): Record<string, any> {
+    const isMeaningful = (v: any): v is string | boolean => v != null && v !== '' && v !== '<nil>';
+
+    return Object.entries(values).reduce<Record<string, any>>((acc, [key, value]) => {
+        if (Array.isArray(value)) {
+            const extracted = value.
+                map((item) => (isAppSelectOption(item) ? item.value : item)).
+                filter(isMeaningful);
+
+            if (extracted.length > 0 || clearEmptyFields) {
+                acc[key] = extracted;
+            }
+        } else if (isAppSelectOption(value)) {
+            if (isMeaningful(value.value)) {
+                acc[key] = value.value;
+            } else if (clearEmptyFields) {
+                acc[key] = '';
+            }
+        } else if (isMeaningful(value)) {
+            acc[key] = value;
+        } else if (clearEmptyFields) {
+            acc[key] = '';
+        }
+        return acc;
+    }, {});
+}
+
+/**
+ * Convert server dialog response directly to AppForm
+ * Combines server response transformation with dialog-to-form conversion
+ */
+export function convertServerDialogResponseToAppForm(
+    serverResponse: any,
+    options: ConversionOptions,
+): ConversionResult {
+    // Transform server response format to props format
+    const transformedDialog = transformServerDialogToProps(serverResponse);
+
+    const {form, errors} = convertDialogToAppForm(
+        transformedDialog.elements,
+        transformedDialog.title,
+        transformedDialog.introductionText,
+        transformedDialog.iconUrl,
+        transformedDialog.submitLabel,
+        transformedDialog.sourceUrl || '',
+        transformedDialog.state || '',
+        options,
+    );
+
+    return {form, errors};
 }
 
 /**
@@ -519,69 +705,73 @@ export function convertAppFormValuesToDialogSubmission(
             break;
 
         case DialogElementTypes.RADIO:
-            submission[element.name] = String(value);
+            // Radio values are normally plain strings, but accept {label, value}
+            // objects for backwards compatibility with older code paths.
+            if (isAppSelectOption(value)) {
+                submission[element.name] = value.value;
+            } else {
+                submission[element.name] = String(value);
+            }
             break;
 
         case DialogElementTypes.SELECT:
+            // Values are already converted to primitives by extractPrimitiveValues
+            // Only validate that the values exist in the options list
             if (Array.isArray(value)) {
                 if (element.multiselect) {
-                    // For multiselect, convert array of AppSelectOption to array of values
-                    const multiValues = value.map((item) => {
-                        if (!element.options) {
-                            return item.value;
-                        }
-                        const validOption = element.options.find((opt) => opt.value === item.value);
-                        if (!validOption) {
+                    // Validate each value in multiselect array
+                    const validatedValues = element.options ? value.filter((val) => {
+                        const isValid = element.options!.some((opt) => opt.value === val);
+                        if (!isValid) {
                             errors.push({
                                 field: element.name,
-                                message: `"${element.name}" field is not valid: Selected value not found in options: ${item.value}`,
+                                message: `"${element.name}" field is not valid: Selected value not found in options: ${val}`,
                                 code: ValidationErrorCode.INVALID_FORMAT,
                             });
-                            return null;
                         }
-                        return validOption.value;
-                    }).filter(Boolean);
-                    submission[element.name] = multiValues;
+                        return isValid;
+                    }) : value;
+                    submission[element.name] = validatedValues;
                 } else {
-                    // For single select with array input, take the first value
+                    // Single select with array - take first value and validate
                     const firstValue = value[0];
-                    if (firstValue && element.options) {
-                        const validOption = element.options.find((opt) => opt.value === firstValue.value);
-                        if (validOption) {
-                            submission[element.name] = validOption.value;
+                    if (firstValue !== undefined && element.options) {
+                        const isValid = element.options.some((opt) => opt.value === firstValue);
+                        if (isValid) {
+                            submission[element.name] = firstValue;
                         } else {
                             errors.push({
                                 field: element.name,
-                                message: `"${element.name}" field is not valid: Selected value not found in options: ${firstValue.value}`,
+                                message: `"${element.name}" field is not valid: Selected value not found in options: ${firstValue}`,
                                 code: ValidationErrorCode.INVALID_FORMAT,
                             });
                             submission[element.name] = null;
                         }
                     } else {
-                        submission[element.name] = firstValue?.value || null;
+                        submission[element.name] = firstValue || null;
                     }
                 }
-            } else if (typeof value === 'object' && value !== null && 'value' in value) {
-                // Handle single AppSelectOption
-                const selectOption = value as AppSelectOption;
-
-                if (options.enhanced && element.options) {
-                    const validOption = element.options.find((opt) => opt.value === selectOption.value);
-                    if (!validOption) {
+            } else {
+                // Single primitive value - validate if options exist
+                if (element.options && options.enhanced && value !== null && value !== undefined) {
+                    const isValid = element.options.some((opt) => opt.value === value);
+                    if (!isValid) {
                         errors.push({
                             field: element.name,
-                            message: `"${element.name}" field is not valid: Selected value not found in options: ${selectOption.value}`,
+                            message: `"${element.name}" field is not valid: Selected value not found in options: ${value}`,
                             code: ValidationErrorCode.INVALID_FORMAT,
                         });
                     }
                 }
-                submission[element.name] = selectOption.value;
-            } else {
-                // Handle primitive values
                 submission[element.name] = value;
             }
             break;
 
+        case DialogElementTypes.DATE:
+        case DialogElementTypes.DATETIME:
+            // Date and datetime values should be passed through as strings (ISO format)
+            submission[element.name] = String(value);
+            break;
         default:
             submission[element.name] = String(value);
         }

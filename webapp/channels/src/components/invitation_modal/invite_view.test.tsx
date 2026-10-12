@@ -2,20 +2,17 @@
 // See LICENSE.txt for license information.
 
 import React from 'react';
-import {act} from 'react-dom/test-utils';
-import {Provider} from 'react-redux';
 
 import type {Team} from '@mattermost/types/teams';
 
 import deepFreeze from 'mattermost-redux/utils/deep_freeze';
 
-import {mountWithIntl} from 'tests/helpers/intl-test-helper';
-import mockStore from 'tests/test_store';
+import {renderWithContext, screen, userEvent} from 'tests/react_testing_utils';
 import {SelfHostedProducts} from 'utils/constants';
 import {TestHelper as TH} from 'utils/test_helper';
 import {generateId} from 'utils/utils';
 
-import InviteAs, {InviteType} from './invite_as';
+import {InviteType} from './invite_as';
 import InviteView from './invite_view';
 import type {Props} from './invite_view';
 
@@ -59,6 +56,9 @@ const defaultProps: Props = deepFreeze({
     usersEmails: [],
     usersEmailsSearch: '',
     townSquareDisplayName: '',
+    canInviteGuestsWithMagicLink: false,
+    useGuestMagicLink: false,
+    toggleGuestMagicLink: jest.fn(),
 });
 
 let props = defaultProps;
@@ -116,24 +116,22 @@ describe('InviteView', () => {
                     },
                 },
             },
+            limits: {
+                serverLimits: {},
+            },
         },
     };
-
-    const store = mockStore(state);
 
     beforeEach(() => {
         props = defaultProps;
     });
 
     it('shows InviteAs component when user can choose to invite guests or users', async () => {
-        await act(async () => {
-            const wrapper = mountWithIntl(
-                <Provider store={store}>
-                    <InviteView {...props}/>
-                </Provider>,
-            );
-            expect(wrapper.find(InviteAs).length).toBe(1);
-        });
+        renderWithContext(
+            <InviteView {...props}/>,
+            state,
+        );
+        expect(screen.getByText('Invite as')).toBeInTheDocument();
     });
 
     it('hides InviteAs component when user can not choose members option', async () => {
@@ -142,14 +140,12 @@ describe('InviteView', () => {
             canAddUsers: false,
         };
 
-        await act(async () => {
-            const wrapper = mountWithIntl(
-                <Provider store={store}>
-                    <InviteView {...props}/>
-                </Provider>,
-            );
-            expect(wrapper.find(InviteAs).length).toBe(0);
-        });
+        renderWithContext(
+            <InviteView {...props}/>,
+            state,
+        );
+
+        expect(screen.queryByText('Invite as')).not.toBeInTheDocument();
     });
 
     it('hides InviteAs component when user can not choose guests option', async () => {
@@ -158,13 +154,75 @@ describe('InviteView', () => {
             canInviteGuests: false,
         };
 
-        await act(async () => {
-            const wrapper = mountWithIntl(
-                <Provider store={store}>
-                    <InviteView {...props}/>
-                </Provider>,
-            );
-            expect(wrapper.find(InviteAs).length).toBe(0);
-        });
+        renderWithContext(
+            <InviteView {...props}/>,
+            state,
+        );
+        expect(screen.queryByText('Invite as')).not.toBeInTheDocument();
+    });
+
+    it('shows guest magic link checkbox when inviting guests and guest magic link is enabled', async () => {
+        props = {
+            ...defaultProps,
+            inviteType: InviteType.GUEST,
+            canInviteGuestsWithMagicLink: true,
+        };
+
+        renderWithContext(
+            <InviteView {...props}/>,
+            state,
+        );
+
+        expect(screen.getByTestId('InviteView__guestMagicLinkCheckbox')).toBeInTheDocument();
+    });
+
+    it('hides guest magic link checkbox when inviting members', async () => {
+        props = {
+            ...defaultProps,
+            inviteType: InviteType.MEMBER,
+            canInviteGuestsWithMagicLink: true,
+        };
+
+        renderWithContext(
+            <InviteView {...props}/>,
+            state,
+        );
+
+        expect(screen.queryByTestId('InviteView__guestMagicLinkCheckbox')).not.toBeInTheDocument();
+    });
+
+    it('hides guest magic link checkbox when guest magic link is not enabled', async () => {
+        props = {
+            ...defaultProps,
+            inviteType: InviteType.GUEST,
+            canInviteGuestsWithMagicLink: false,
+        };
+
+        renderWithContext(
+            <InviteView {...props}/>,
+            state,
+        );
+
+        expect(screen.queryByTestId('InviteView__guestMagicLinkCheckbox')).not.toBeInTheDocument();
+    });
+
+    it('calls toggleGuestMagicLink when checkbox is clicked', async () => {
+        const toggleGuestMagicLink = jest.fn();
+        props = {
+            ...defaultProps,
+            inviteType: InviteType.GUEST,
+            canInviteGuestsWithMagicLink: true,
+            toggleGuestMagicLink,
+        };
+
+        renderWithContext(
+            <InviteView {...props}/>,
+            state,
+        );
+
+        const checkbox = screen.getByTestId('InviteView__guestMagicLinkCheckbox');
+        await userEvent.click(checkbox);
+
+        expect(toggleGuestMagicLink).toHaveBeenCalledTimes(1);
     });
 });

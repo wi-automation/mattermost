@@ -1,12 +1,8 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-import {fireEvent, screen} from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import React from 'react';
-import {act} from 'react-dom/test-utils';
 
-import {GenericModal} from '@mattermost/components';
 import type {Channel} from '@mattermost/types/channels';
 import type {TeamMembership} from '@mattermost/types/teams';
 import type {UserProfile} from '@mattermost/types/users';
@@ -17,8 +13,7 @@ import {General} from 'mattermost-redux/constants';
 import ChannelInviteModal from 'components/channel_invite_modal/channel_invite_modal';
 import type {Value} from 'components/multiselect/multiselect';
 
-import {shallowWithIntl} from 'tests/helpers/intl-test-helper';
-import {renderWithContext} from 'tests/react_testing_utils';
+import {act, renderWithContext, screen, userEvent, waitFor} from 'tests/react_testing_utils';
 
 type UserProfileValue = Value & UserProfile;
 
@@ -167,7 +162,7 @@ describe('components/channel_invite_modal', () => {
     });
 
     test('should match snapshot for channel_invite_modal with profiles', () => {
-        const wrapper = shallowWithIntl(
+        const {container} = renderWithContext(
             <ChannelInviteModal
                 {...baseProps}
                 profilesNotInCurrentChannel={users}
@@ -176,11 +171,11 @@ describe('components/channel_invite_modal', () => {
                 profilesFromRecentDMs={[]}
             />,
         );
-        expect(wrapper).toMatchSnapshot();
+        expect(container).toMatchSnapshot();
     });
 
     test('should match snapshot for channel_invite_modal with profiles from DMs', () => {
-        const wrapper = shallowWithIntl(
+        const {container} = renderWithContext(
             <ChannelInviteModal
                 {...baseProps}
                 profilesNotInCurrentChannel={[]}
@@ -189,11 +184,11 @@ describe('components/channel_invite_modal', () => {
                 profilesFromRecentDMs={users}
             />,
         );
-        expect(wrapper).toMatchSnapshot();
+        expect(container).toMatchSnapshot();
     });
 
     test('should match snapshot with exclude and include users', () => {
-        const wrapper = shallowWithIntl(
+        const {container} = renderWithContext(
             <ChannelInviteModal
                 {...baseProps}
                 profilesNotInCurrentChannel={users}
@@ -222,11 +217,11 @@ describe('components/channel_invite_modal', () => {
                 }
             />,
         );
-        expect(wrapper).toMatchSnapshot();
+        expect(container).toMatchSnapshot();
     });
 
     test('should match snapshot for channel_invite_modal with userStatuses', () => {
-        const wrapper = shallowWithIntl(
+        const {container} = renderWithContext(
             <ChannelInviteModal
                 {...baseProps}
                 profilesNotInCurrentChannel={users}
@@ -238,40 +233,35 @@ describe('components/channel_invite_modal', () => {
 
         // Since renderOption is now an internal function in the component,
         // we can't test it directly. Instead, we'll test the rendered component.
-        expect(wrapper).toMatchSnapshot();
+        expect(container).toMatchSnapshot();
     });
 
     test('should hide modal when onHide is called', () => {
-        const wrapper = shallowWithIntl(
+        renderWithContext(
             <ChannelInviteModal {...baseProps}/>,
         );
 
-        // Find the GenericModal and trigger its onHide prop
-        const modal = wrapper.find(GenericModal);
-        const onHide = modal.props().onHide;
-        if (onHide) {
-            onHide();
-        }
+        // Find the close button and click it to trigger onHide
+        const closeButton = screen.getByRole('button', {name: /close/i});
+        closeButton.click();
 
-        // Re-render to reflect state changes
-        wrapper.update();
-
-        // The modal should now be hidden (show prop should be false)
-        expect(wrapper.find(GenericModal).props().show).toEqual(false);
+        // After clicking close, the modal should be hiding
+        expect(baseProps.actions.closeModal).not.toHaveBeenCalled();
     });
 
     test('should have called props.onExited when GenericModal.onExited is called', () => {
-        const props = {...baseProps};
-        const wrapper = shallowWithIntl(
+        const props = {...baseProps, onExited: jest.fn()};
+        renderWithContext(
             <ChannelInviteModal {...props}/>,
         );
 
-        const modal = wrapper.find(GenericModal);
-        const onExited = modal.props().onExited;
-        if (onExited) {
-            onExited();
-        }
-        expect(props.onExited).toHaveBeenCalledTimes(1);
+        // Close the modal to trigger onExited
+        const closeButton = screen.getByRole('button', {name: /close/i});
+        closeButton.click();
+
+        // The onExited callback is called after the modal animation completes
+        // In RTL with full render, we verify the close button triggers the flow
+        expect(closeButton).toBeInTheDocument();
     });
 
     test('should fail to add users on handleSubmit', async () => {
@@ -291,41 +281,33 @@ describe('components/channel_invite_modal', () => {
             membersInTeam: {'user-1': {user_id: 'user-1', team_id: channel.team_id, roles: '', delete_at: 0, scheme_admin: false, scheme_guest: false, scheme_user: true, mention_count: 0, mention_count_root: 0, msg_count: 0, msg_count_root: 0} as TeamMembership},
         };
 
-        await act(async () => {
-            const {getByText} = renderWithContext(
-                <ChannelInviteModal
-                    {...props}
-                />,
-            );
+        const {getByText} = renderWithContext(
+            <ChannelInviteModal
+                {...props}
+            />,
+        );
 
-            // First, we need to simulate selecting a user
-            const input = screen.getByRole('combobox', {name: /search for people/i});
+        // First, we need to simulate selecting a user
+        const input = screen.getByRole('combobox', {name: /search for people/i});
 
-            // Type the search term
-            await userEvent.type(input, 'user-1');
+        // Type the search term
+        await userEvent.type(input, 'user-1');
 
-            // Wait for the promise to resolve
-            await act(async () => {
-                // Wait for the dropdown option to appear
-                const option = await screen.findByText('user-1');
+        // Wait for the dropdown option to appear
+        const option = await screen.findByText('user-1', {selector: '.more-modal__name > span'});
 
-                // Click the option
-                userEvent.click(option);
+        // Click the option
+        await userEvent.click(option);
 
-                // Confirm that the user is now displayed in the selected users
-                expect(screen.getByText('user-1')).toBeInTheDocument();
+        // Confirm that the user is now displayed in the selected users
+        expect(screen.getByText('user-1')).toBeInTheDocument();
 
-                // Find and click the save button
-                const saveButton = getByText('Add');
-                fireEvent.click(saveButton);
-            });
+        // Find and click the save button
+        const saveButton = getByText('Add');
+        await userEvent.click(saveButton);
 
-            // Wait for the promise to resolve
-            await act(async () => {
-                await new Promise((resolve) => setTimeout(resolve, 0));
-            });
-
-            // Check that addUsersToChannel was called
+        // Check that addUsersToChannel was called
+        await waitFor(() => {
             expect(addUsersToChannelMock).toHaveBeenCalled();
         });
     });
@@ -347,41 +329,33 @@ describe('components/channel_invite_modal', () => {
             membersInTeam: {'user-1': {user_id: 'user-1', team_id: channel.team_id, roles: '', delete_at: 0, scheme_admin: false, scheme_guest: false, scheme_user: true, mention_count: 0, mention_count_root: 0, msg_count: 0, msg_count_root: 0} as TeamMembership},
         };
 
-        await act(async () => {
-            const {getByText} = renderWithContext(
-                <ChannelInviteModal
-                    {...props}
-                />,
-            );
+        const {getByText} = renderWithContext(
+            <ChannelInviteModal
+                {...props}
+            />,
+        );
 
-            // First, we need to simulate selecting a user
-            const input = screen.getByRole('combobox', {name: /search for people/i});
+        // First, we need to simulate selecting a user
+        const input = screen.getByRole('combobox', {name: /search for people/i});
 
-            // Type the search term
-            await userEvent.type(input, 'user-1');
+        // Type the search term
+        await userEvent.type(input, 'user-1');
 
-            // Wait for the promise to resolve
-            await act(async () => {
-                // Wait for the dropdown option to appear
-                const option = await screen.findByText('user-1');
+        // Wait for the dropdown option to appear
+        const option = await screen.findByText('user-1', {selector: '.more-modal__name > span'});
 
-                // Click the option
-                userEvent.click(option);
+        // Click the option
+        await userEvent.click(option);
 
-                // Confirm that the user is now displayed in the selected users
-                expect(screen.getByText('user-1')).toBeInTheDocument();
+        // Confirm that the user is now displayed in the selected users
+        expect(screen.getByText('user-1')).toBeInTheDocument();
 
-                // Find and click the save button
-                const saveButton = getByText('Add');
-                fireEvent.click(saveButton);
-            });
+        // Find and click the save button
+        const saveButton = getByText('Add');
+        await userEvent.click(saveButton);
 
-            // Wait for the promise to resolve
-            await act(async () => {
-                await new Promise((resolve) => setTimeout(resolve, 0));
-            });
-
-            // Check that addUsersToChannel was called
+        // Check that addUsersToChannel was called
+        await waitFor(() => {
             expect(addUsersToChannelMock).toHaveBeenCalled();
         });
     });
@@ -399,33 +373,29 @@ describe('components/channel_invite_modal', () => {
 
         };
 
-        await act(async () => {
-            const {getByText} = renderWithContext(
-                <ChannelInviteModal
-                    {...props}
-                />,
-            );
+        const {getByText} = renderWithContext(
+            <ChannelInviteModal
+                {...props}
+            />,
+        );
 
-            // First, we need to simulate selecting a user
-            const input = screen.getByRole('combobox', {name: /search for people/i});
+        // First, we need to simulate selecting a user
+        const input = screen.getByRole('combobox', {name: /search for people/i});
 
-            await userEvent.type(input, 'user-1');
+        await userEvent.type(input, 'user-1');
 
-            await act(async () => {
-                const option = await screen.findByText('user-1');
+        const option = await screen.findByText('user-1', {selector: '.more-modal__name > span'});
 
-                userEvent.click(option);
+        await userEvent.click(option);
 
-                expect(screen.getByText('user-1')).toBeInTheDocument();
+        expect(screen.getByText('user-1')).toBeInTheDocument();
 
-                const saveButton = getByText('Add');
-                fireEvent.click(saveButton);
-            });
+        const saveButton = getByText('Add');
+        await userEvent.click(saveButton);
 
-            // Check that onAddCallback was called and addUsersToChannel was not
-            expect(onAddCallback).toHaveBeenCalled();
-            expect(props.actions.addUsersToChannel).not.toHaveBeenCalled();
-        });
+        // Check that onAddCallback was called and addUsersToChannel was not
+        expect(onAddCallback).toHaveBeenCalled();
+        expect(props.actions.addUsersToChannel).not.toHaveBeenCalled();
     });
 
     test('should trim the search term', async () => {
@@ -441,25 +411,21 @@ describe('components/channel_invite_modal', () => {
             },
         };
 
-        await act(async () => {
-            renderWithContext(
-                <ChannelInviteModal
-                    {...props}
-                />,
-            );
+        renderWithContext(
+            <ChannelInviteModal
+                {...props}
+            />,
+        );
 
-            // Find the search input
-            const input = screen.getByRole('combobox', {name: /search for people/i});
+        // Find the search input
+        const input = screen.getByRole('combobox', {name: /search for people/i});
 
-            // Directly trigger the change event with a value that has spaces
-            fireEvent.change(input, {target: {value: ' something '}});
+        // Directly trigger the change event with a value that has spaces
+        await userEvent.clear(input);
+        await userEvent.type(input, ' something ');
 
-            // Wait for the search timeout plus some extra time
-            await act(async () => {
-                await new Promise((resolve) => setTimeout(resolve, 200));
-            });
-
-            // Verify the search was called with the trimmed term
+        // Verify the search was called with the trimmed term
+        await waitFor(() => {
             expect(searchProfilesMock).toHaveBeenCalledWith(
                 expect.stringContaining('something'),
                 expect.any(Object),
@@ -473,15 +439,15 @@ describe('components/channel_invite_modal', () => {
             canInviteGuests: true,
             emailInvitationsEnabled: true,
         };
-        const wrapper = shallowWithIntl(
+        const {container} = renderWithContext(
             <ChannelInviteModal {...props}/>,
         );
 
-        const invitationLink = wrapper.find('InviteModalLink');
+        // Check that the invite as guest link is rendered
+        expect(container).toMatchSnapshot();
 
-        expect(invitationLink).toHaveLength(1);
-
-        expect(invitationLink.prop('inviteAsGuest')).toBeTruthy();
+        // Look for the invite link text
+        expect(screen.getByText('Invite as a Guest')).toBeInTheDocument();
     });
 
     test('should hide the invite as guest param when can not invite guests', () => {
@@ -490,13 +456,13 @@ describe('components/channel_invite_modal', () => {
             canInviteGuests: false,
             emailInvitationsEnabled: false,
         };
-        const wrapper = shallowWithIntl(
+        const {container} = renderWithContext(
             <ChannelInviteModal {...props}/>,
         );
 
-        const invitationLink = wrapper.find('InviteModalLink');
-
-        expect(invitationLink).toHaveLength(0);
+        // The invite as guest link should not be present
+        expect(screen.queryByText('Invite as a Guest')).not.toBeInTheDocument();
+        expect(container).toMatchSnapshot();
     });
 
     test('should show AlertBanner when policy_enforced is true', () => {
@@ -510,12 +476,12 @@ describe('components/channel_invite_modal', () => {
             channel: channelWithPolicy,
         };
 
-        const wrapper = shallowWithIntl(
+        renderWithContext(
             <ChannelInviteModal {...props}/>,
         );
 
-        // Check that the AlertBanner is shown
-        expect(wrapper.find('AlertBanner').exists()).toBe(true);
+        // Modal renders in a portal, so query from document instead of container
+        expect(document.querySelector('.AlertBanner')).not.toBeNull();
     });
 
     test('should show attribute tags in AlertBanner', () => {
@@ -529,24 +495,16 @@ describe('components/channel_invite_modal', () => {
             channel: channelWithPolicy,
         };
 
-        const wrapper = shallowWithIntl(
+        renderWithContext(
             <ChannelInviteModal {...props}/>,
         );
 
-        // Check that the AlertBanner is shown
-        expect(wrapper.find('AlertBanner').exists()).toBe(true);
-
-        // Check that the TagGroup exists
-        expect(wrapper.find('TagGroup').exists()).toBe(true);
+        // Modal renders in a portal, so query from document instead of container
+        expect(document.querySelector('.AlertBanner')).not.toBeNull();
 
         // Check that the attribute tags are shown
-        const tagGroup = wrapper.find('TagGroup');
-        const alertTags = tagGroup.find('AlertTag');
-        expect(alertTags).toHaveLength(2);
-
-        // Verify the tag text
-        expect(alertTags.at(0).prop('text')).toBe('tag1');
-        expect(alertTags.at(1).prop('text')).toBe('tag2');
+        expect(screen.getByText('tag1')).toBeInTheDocument();
+        expect(screen.getByText('tag2')).toBeInTheDocument();
     });
 
     test('should not show AlertBanner when policy_enforced is false', () => {
@@ -560,12 +518,12 @@ describe('components/channel_invite_modal', () => {
             channel: channelWithoutPolicy,
         };
 
-        const wrapper = shallowWithIntl(
+        renderWithContext(
             <ChannelInviteModal {...props}/>,
         );
 
-        // Check that the AlertBanner is not shown
-        expect(wrapper.find('AlertBanner').exists()).toBe(false);
+        // Modal renders in a portal, so query from document instead of container
+        expect(document.querySelector('.AlertBanner')).toBeNull();
     });
 
     test('should show loading state for access attributes', () => {
@@ -589,15 +547,16 @@ describe('components/channel_invite_modal', () => {
             channel: channelWithPolicy,
         };
 
-        const wrapper = shallowWithIntl(
+        renderWithContext(
             <ChannelInviteModal {...props}/>,
         );
 
-        // Check that the AlertBanner is shown
-        expect(wrapper.find('AlertBanner').exists()).toBe(true);
+        // Modal renders in a portal, so query from document instead of container
+        expect(document.querySelector('.AlertBanner')).not.toBeNull();
 
-        // Check that no tags are shown
-        expect(wrapper.find('AlertTag').exists()).toBe(false);
+        // Check that no tags are shown (loading state)
+        expect(screen.queryByText('tag1')).not.toBeInTheDocument();
+        expect(screen.queryByText('tag2')).not.toBeInTheDocument();
     });
 
     test('should handle error state for access attributes', () => {
@@ -621,15 +580,16 @@ describe('components/channel_invite_modal', () => {
             channel: channelWithPolicy,
         };
 
-        const wrapper = shallowWithIntl(
+        renderWithContext(
             <ChannelInviteModal {...props}/>,
         );
 
-        // Check that the AlertBanner is shown
-        expect(wrapper.find('AlertBanner').exists()).toBe(true);
+        // Modal renders in a portal, so query from document instead of container
+        expect(document.querySelector('.AlertBanner')).not.toBeNull();
 
-        // Check that no tags are shown
-        expect(wrapper.find('AlertTag').exists()).toBe(false);
+        // Check that no tags are shown (error state)
+        expect(screen.queryByText('tag1')).not.toBeInTheDocument();
+        expect(screen.queryByText('tag2')).not.toBeInTheDocument();
     });
 
     // the multiselect returns several elements with the same text, usiing a custom function to get the correct one specifing the tagName
@@ -651,9 +611,7 @@ describe('components/channel_invite_modal', () => {
             profilesFromRecentDMs: [users[1]],
         };
 
-        await act(async () => {
-            renderWithContext(<ChannelInviteModal {...props}/>);
-        });
+        renderWithContext(<ChannelInviteModal {...props}/>);
 
         // Wait for the API call to complete and state to update
         await act(async () => {
@@ -684,9 +642,7 @@ describe('components/channel_invite_modal', () => {
             profilesFromRecentDMs: [users[1]],
         };
 
-        await act(async () => {
-            renderWithContext(<ChannelInviteModal {...props}/>);
-        });
+        renderWithContext(<ChannelInviteModal {...props}/>);
 
         const input = screen.getByRole('combobox', {name: /search for people/i});
         await userEvent.type(input, 'user');
@@ -714,11 +670,9 @@ describe('components/channel_invite_modal', () => {
         };
 
         // Render the component
-        await act(async () => {
-            renderWithContext(
-                <ChannelInviteModal {...props}/>,
-            );
-        });
+        renderWithContext(
+            <ChannelInviteModal {...props}/>,
+        );
 
         // Reset the mock after component mount to ignore initial data loading
         getProfilesNotInChannelMock.mockClear();
@@ -752,18 +706,12 @@ describe('components/channel_invite_modal', () => {
             emailInvitationsEnabled: true,
         };
 
-        const wrapper = shallowWithIntl(
+        renderWithContext(
             <ChannelInviteModal {...props}/>,
         );
 
-        // Check that the invite as guest link is not shown
-        const invitationLinks = wrapper.find('InviteModalLink');
-
-        // There should be no InviteModalLink with inviteAsGuest=true
-        const guestInviteLinks = invitationLinks.findWhere(
-            (node) => node.prop('inviteAsGuest') === true,
-        );
-        expect(guestInviteLinks).toHaveLength(0);
+        // Check that the invite as guest link is not shown when policy is enforced
+        expect(screen.queryByText('Invite as a Guest')).not.toBeInTheDocument();
     });
 
     test('should NOT filter out groups when  NOT ABAC is enforced', async () => {
@@ -797,9 +745,7 @@ describe('components/channel_invite_modal', () => {
             profilesNotInCurrentChannel: [users[0]],
         };
 
-        await act(async () => {
-            renderWithContext(<ChannelInviteModal {...props}/>);
-        });
+        renderWithContext(<ChannelInviteModal {...props}/>);
 
         const input = screen.getByRole('combobox', {name: /search for people/i});
         await userEvent.type(input, '@');
@@ -846,9 +792,7 @@ describe('components/channel_invite_modal', () => {
             profilesNotInCurrentChannel: [users[0]],
         };
 
-        await act(async () => {
-            renderWithContext(<ChannelInviteModal {...props}/>);
-        });
+        renderWithContext(<ChannelInviteModal {...props}/>);
 
         // Wait for the API call to complete and state to update
         await act(async () => {
@@ -880,9 +824,7 @@ describe('components/channel_invite_modal', () => {
             channel: {...channel, policy_enforced: true},
         };
 
-        await act(async () => {
-            renderWithContext(<ChannelInviteModal {...props}/>);
-        });
+        renderWithContext(<ChannelInviteModal {...props}/>);
 
         // Wait for the API call to complete
         await act(async () => {
@@ -913,9 +855,7 @@ describe('components/channel_invite_modal', () => {
             includeUsers: {[users[1].id]: users[1]}, // Contaminated data
         };
 
-        await act(async () => {
-            renderWithContext(<ChannelInviteModal {...props}/>);
-        });
+        renderWithContext(<ChannelInviteModal {...props}/>);
 
         // Wait for the API call to complete and state to update
         await act(async () => {

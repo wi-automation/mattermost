@@ -5,14 +5,23 @@ import {Locator, expect} from '@playwright/test';
 
 export default class ChannelsSidebarLeft {
     readonly container: Locator;
+
+    readonly teamMenuButton: Locator;
+    readonly browseOrCreateChannelButton: Locator;
     readonly findChannelButton;
     readonly scheduledPostBadge;
+    readonly unreadChannelFilter;
+    readonly openDirectMessageButton;
 
     constructor(container: Locator) {
         this.container = container;
 
+        this.teamMenuButton = container.locator('#sidebarTeamMenuButton');
+        this.browseOrCreateChannelButton = container.locator('#browseOrAddChannelMenuButton');
         this.findChannelButton = container.getByRole('button', {name: 'Find Channels'});
         this.scheduledPostBadge = container.locator('span.scheduledPostBadge');
+        this.unreadChannelFilter = container.locator('.SidebarFilters_filterButton');
+        this.openDirectMessageButton = container.getByRole('button', {name: 'Write a direct message'});
     }
 
     async toBeVisible() {
@@ -20,14 +29,58 @@ export default class ChannelsSidebarLeft {
     }
 
     /**
-     * Clicks on the sidebar channel link with the given name.
+     * Locates the sidebar link with the given name.
      * It can be any sidebar item name including channels, direct messages, or group messages, threads, etc.
+     * Falls back to matching by visible text since some sidebar items (e.g. DMs) may not resolve by the plain ID.
+     * @param name
+     */
+    item(name: string): Locator {
+        return this.container
+            .locator(`#sidebarItem_${name}`)
+            .or(this.container.locator('.SidebarLink').filter({hasText: name}))
+            .first();
+    }
+
+    /**
+     * Clicks on the sidebar channel link with the given name.
      * @param channelName
      */
     async goToItem(channelName: string) {
-        const channel = this.container.locator(`#sidebarItem_${channelName}`);
+        const channel = this.item(channelName);
         await channel.waitFor();
         await channel.click();
+    }
+
+    /**
+     * Verifies the sidebar item with the given name is in the unread state.
+     * @param name
+     */
+    async assertItemUnread(name: string) {
+        await expect(this.item(name)).toHaveClass(/unread|unread-title/);
+    }
+
+    /**
+     * Verifies the sidebar item with the given name is in the read (not unread) state.
+     * @param name
+     */
+    async assertItemRead(name: string) {
+        await expect(this.item(name)).not.toHaveClass(/unread|unread-title/);
+    }
+
+    /**
+     * Locates the unread-mentions count badge nested inside the sidebar item with the given name.
+     * @param name
+     */
+    unreadMentionsBadge(name: string): Locator {
+        return this.item(name).locator('#unreadMentions');
+    }
+
+    /**
+     * Locates the group message member-count badge nested inside the sidebar item with the given name.
+     * @param name
+     */
+    memberCountBadge(name: string): Locator {
+        return this.item(name).locator('.status--group');
     }
 
     /**
@@ -45,5 +98,26 @@ export default class ChannelsSidebarLeft {
     async draftsNotVisible() {
         const channel = this.container.getByText('Drafts', {exact: true});
         await expect(channel).not.toBeVisible();
+    }
+
+    /**
+     * Verifies if 'unreads' filter is applied to sidebar.
+     */
+    async isUnreadsFilterActive(): Promise<boolean> {
+        return await this.unreadChannelFilter.evaluate((el) => el.classList.contains('active'));
+    }
+
+    /**
+     * Toggles the unread filter on or off.
+     */
+    async toggleUnreadsFilter() {
+        await this.unreadChannelFilter.click();
+    }
+
+    /**
+     * Gets all unread channel items in the sidebar.
+     */
+    getUnreadChannels(): Locator {
+        return this.container.locator('.SidebarLink.unread-title');
     }
 }

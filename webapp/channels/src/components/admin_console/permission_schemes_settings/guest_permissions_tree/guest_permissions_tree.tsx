@@ -9,6 +9,8 @@ import type {Role} from '@mattermost/types/roles';
 
 import Permissions from 'mattermost-redux/constants/permissions';
 
+import {isMinimumProfessionalLicense} from 'utils/license_utils';
+
 import EditPostTimeLimitButton from '../edit_post_time_limit_button';
 import EditPostTimeLimitModal from '../edit_post_time_limit_modal';
 import PermissionGroup from '../permission_group';
@@ -30,6 +32,7 @@ const GuestPermissionsTree = ({license, onToggle, readOnly, scope, selectRow, pa
         const defaultPermissions = [
             Permissions.CREATE_PRIVATE_CHANNEL,
             Permissions.EDIT_POST,
+            Permissions.EDIT_FILE_ATTACHMENT,
             Permissions.DELETE_POST,
             {
                 id: 'guest_' + Permissions.CREATE_POST,
@@ -49,7 +52,7 @@ const GuestPermissionsTree = ({license, onToggle, readOnly, scope, selectRow, pa
             },
             Permissions.USE_CHANNEL_MENTIONS,
         ];
-        if (license && license.IsLicensed === 'true' && license.LDAPGroups === 'true') {
+        if (isMinimumProfessionalLicense(license)) {
             defaultPermissions.push(Permissions.USE_GROUP_MENTIONS);
         }
         return defaultPermissions.map((permission) => {

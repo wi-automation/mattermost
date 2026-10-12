@@ -407,11 +407,9 @@ func (wc *WebConn) SetSession(v *model.Session) {
 // is ready to send/receive messages.
 func (wc *WebConn) Pump() {
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		wc.writePump()
-	}()
+	})
 
 	wg.Add(1)
 	go wc.pluginPostedConsumer(&wg)
@@ -466,6 +464,12 @@ func (wc *WebConn) readPump() {
 		msgType, rd, err := wc.WebSocket.NextReader()
 		if err != nil {
 			wc.logSocketErr("websocket.NextReader", err)
+			return
+		}
+
+		// Reject binary frames from unauthenticated connections. See MM-68222.
+		if msgType != websocket.TextMessage && !wc.IsAuthenticated() {
+			wc.logSocketErr("websocket.UnauthBinary", errors.New("binary frames require authentication"))
 			return
 		}
 
@@ -569,6 +573,10 @@ func (wc *WebConn) writePump() {
 			}
 
 			evt, evtOk := msg.(*model.WebSocketEvent)
+
+			if evtOk && evt.IsRejected() {
+				continue
+			}
 
 			buf.Reset()
 			var err error
@@ -805,7 +813,8 @@ func (wc *WebConn) IsMFAAuthenticated() bool {
 	c := request.EmptyContext(wc.Platform.logger).WithSession(session)
 
 	// Check if MFA is required and user has NOT completed MFA
-	if appErr := wc.Suite.MFARequired(c); appErr != nil {
+	// WebSocket connections are established via an HTTP GET upgrade request.
+	if appErr := wc.Suite.MFARequired(c, http.MethodGet); appErr != nil {
 		return false
 	}
 

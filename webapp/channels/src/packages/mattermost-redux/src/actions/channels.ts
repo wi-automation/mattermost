@@ -28,6 +28,7 @@ import {getCategoryInTeamByType} from 'mattermost-redux/selectors/entities/chann
 import {
     getChannel as getChannelSelector,
     getMyChannelMember as getMyChannelMemberSelector,
+    hasAutotranslationBecomeEnabled,
     isManuallyUnread,
 } from 'mattermost-redux/selectors/entities/channels';
 import {getCurrentTeamId} from 'mattermost-redux/selectors/entities/teams';
@@ -37,6 +38,7 @@ import {DelayedDataLoader} from 'mattermost-redux/utils/data_loader';
 import {addChannelToInitialCategory, addChannelToCategory} from './channel_categories';
 import {logError} from './errors';
 import {bindClientFunc, forceLogoutIfNecessary} from './helpers';
+import {resetReloadPostsInChannel} from './posts';
 import {savePreferences} from './preferences';
 import {loadRolesIfNeeded} from './roles';
 import {getMissingProfilesByIds} from './users';
@@ -262,6 +264,44 @@ export function patchChannel(channelId: string, patch: Partial<Channel>): Action
     });
 }
 
+export function setMyChannelAutotranslation(channelId: string, enabled: boolean): ActionFuncAsync<boolean> {
+    return async (dispatch, getState) => {
+        const state = getState();
+        const myChannelMember = getMyChannelMemberSelector(state, channelId);
+
+        if (!myChannelMember) {
+            return {data: false, error: 'Channel member not found'};
+        }
+
+        const updatedMember: ChannelMembership = {
+            ...myChannelMember,
+            autotranslation_disabled: !enabled,
+        };
+        try {
+            await Client4.setMyChannelAutotranslation(channelId, enabled);
+        } catch (error) {
+            forceLogoutIfNecessary(error, dispatch, getState);
+            dispatch(logError(error));
+            return {data: undefined, error};
+        }
+
+        // We check before updating the store
+        const becameEnabled = hasAutotranslationBecomeEnabled(state, updatedMember);
+
+        dispatch({
+            type: ChannelTypes.RECEIVED_MY_CHANNEL_MEMBER,
+            data: updatedMember,
+        });
+
+        // If autotranslation changed, delete posts for this channel
+        if (becameEnabled) {
+            await dispatch(resetReloadPostsInChannel(channelId));
+        }
+
+        return {data: true, error: undefined};
+    };
+}
+
 export function updateChannelPrivacy(channelId: string, privacy: string): ActionFuncAsync<Channel> {
     return bindClientFunc({
         clientFunc: Client4.updateChannelPrivacy,
@@ -351,11 +391,11 @@ export function getChannelByNameAndTeamName(teamName: string, channelName: strin
     };
 }
 
-export function getChannel(channelId: string): ActionFuncAsync<Channel> {
+export function getChannel(channelId: string, asContentReviewer = false): ActionFuncAsync<Channel> {
     return async (dispatch, getState) => {
         let data;
         try {
-            data = await Client4.getChannel(channelId);
+            data = await Client4.getChannel(channelId, asContentReviewer);
         } catch (error) {
             forceLogoutIfNecessary(error, dispatch, getState);
             dispatch({type: ChannelTypes.CHANNELS_FAILURE, error});
@@ -1390,12 +1430,12 @@ export function getChannelMemberCountsByGroup(channelId: string) {
     });
 }
 
-export function fetchMissingChannels(channelIDs: string[]): ActionFuncAsync<Array<Channel['id']>> {
+export function fetchMissingChannels(channelIDs: string[], asContentReviewer = false): ActionFuncAsync<Array<Channel['id']>> {
     return async (dispatch, getState, {loaders}: any) => {
         if (!loaders.missingChannelLoader) {
             loaders.missingChannelLoader = new DelayedDataLoader<Channel['id']>({
                 fetchBatch: (channelIDs) => {
-                    return channelIDs.length ? dispatch(getChannel(channelIDs[0])) : Promise.resolve();
+                    return channelIDs.length ? dispatch(getChannel(channelIDs[0], asContentReviewer)) : Promise.resolve();
                 },
                 maxBatchSize: 1,
                 wait: 100,
@@ -1414,6 +1454,16 @@ export function fetchMissingChannels(channelIDs: string[]): ActionFuncAsync<Arra
             data: missingChannelIDs,
         };
     };
+}
+
+export function fetchIsRestrictedDM(channelId: string) {
+    return bindClientFunc({
+        clientFunc: async () => {
+            const teams = (await Client4.getGroupMessageMembersCommonTeams(channelId)).data;
+            return {channelId, isRestricted: teams.length === 0};
+        },
+        onSuccess: ChannelTypes.RECEIVED_IS_DM_RESTRICTED,
+    });
 }
 
 export function getChannelAccessControlAttributes(channelId: string): ActionFuncAsync<AccessControlAttributes> {

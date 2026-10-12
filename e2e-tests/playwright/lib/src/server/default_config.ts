@@ -3,14 +3,16 @@
 
 import merge from 'deepmerge';
 import {
+    AccessControlSettings,
     AdminConfig,
+    AnnouncementSettings,
+    AutoTranslationSettings,
     ClusterSettings,
     CollapsedThreads,
     EmailSettings,
     ExperimentalSettings,
     LogSettings,
     PasswordSettings,
-    PluginSettings,
     ServiceSettings,
     TeamSettings,
 } from '@mattermost/types/config';
@@ -21,20 +23,49 @@ export function getOnPremServerConfig(): AdminConfig {
     return merge<AdminConfig>(defaultServerConfig, onPremServerConfig() as AdminConfig);
 }
 
+export function mergeWithOnPremServerConfig(overrides: Partial<AdminConfig>): AdminConfig {
+    return merge<AdminConfig>(getOnPremServerConfig(), overrides);
+}
+
+/** Live-reloadable on-prem overrides only — safe for patchConfig (no restart-required keys). */
+export function getOnPremServerConfigPatch(): Partial<AdminConfig> {
+    return onPremServerConfig() as Partial<AdminConfig>;
+}
+
 type TestAdminConfig = {
+    AccessControlSettings: Partial<AccessControlSettings>;
+    AnnouncementSettings: Partial<AnnouncementSettings>;
+    AutoTranslationSettings: Partial<AutoTranslationSettings>;
     ClusterSettings: Partial<ClusterSettings>;
     EmailSettings: Partial<EmailSettings>;
     ExperimentalSettings: Partial<ExperimentalSettings>;
     LogSettings: Partial<LogSettings>;
     PasswordSettings: Partial<PasswordSettings>;
-    PluginSettings: Partial<PluginSettings>;
     ServiceSettings: Partial<ServiceSettings>;
     TeamSettings: Partial<TeamSettings>;
 };
 
-// On-prem setting that is different from the default
+// On-prem setting that is different from the default.
+//
+// Carries no PluginSettings: patchConfig replaces the PluginStates map wholesale, which would
+// clobber the plugins a running spec enabled. Specs enable and disable plugins per id instead.
 const onPremServerConfig = (): Partial<TestAdminConfig> => {
     return {
+        AccessControlSettings: {
+            EnableAttributeBasedAccessControl: true,
+            EnableUserManagedAttributes: true,
+        },
+        AnnouncementSettings: {
+            // An in-product notice opens a modal over the channel view and swallows clicks near it.
+            AdminNoticesEnabled: false,
+            UserNoticesEnabled: false,
+        },
+        AutoTranslationSettings: {
+            // Channel autotranslation specs enable this via updateConfig. initSetup used to
+            // reset it with a full snapshot; patchConfig must restore Enable:false or later
+            // Localization specs click the already-on toggle off and miss Providerdropdown.
+            Enable: false,
+        },
         ClusterSettings: {
             Enable: testConfig.haClusterEnabled,
             ClusterName: testConfig.haClusterName,
@@ -46,29 +77,20 @@ const onPremServerConfig = (): Partial<TestAdminConfig> => {
             EnableDiagnostics: false,
         },
         PasswordSettings: {
-            MinimumLength: 5,
+            MinimumLength: 14,
             Lowercase: false,
             Number: false,
             Uppercase: false,
             Symbol: false,
             EnableForgotLink: true,
         },
-        PluginSettings: {
-            EnableUploads: true,
-            PluginStates: {
-                'com.mattermost.calls': {
-                    Enable: false,
-                },
-                'com.mattermost.nps': {
-                    Enable: false,
-                },
-                playbooks: {
-                    Enable: true,
-                },
-            },
-        },
         ServiceSettings: {
-            SiteURL: testConfig.baseURL,
+            // SiteURL is the server's own view of itself (e.g. for building plugin callback
+            // URLs), so it must use an address the server can reach itself with. In `testcontainers` mode
+            // testConfig.baseURL is a host-mapped port the server's own container can't reach;
+            // internalBaseURL is the Docker network alias there, and the same as baseURL in
+            // `external` mode — correct in both cases.
+            SiteURL: testConfig.internalBaseURL,
             EnableOnboardingFlow: false,
             EnableSecurityFixAlert: false,
             GiphySdkKey: 's0glxvzVg9azvPipKxcPLpXV0q1x1fVP',
@@ -82,7 +104,7 @@ const onPremServerConfig = (): Partial<TestAdminConfig> => {
 };
 
 // Should be based only from the generated default config from ./server via "make config-reset"
-// Based on v10.11 server
+// Based on v11.7 server
 const defaultServerConfig: AdminConfig = {
     ServiceSettings: {
         SiteURL: '',
@@ -106,6 +128,8 @@ const defaultServerConfig: AdminConfig = {
         MaximumLoginAttempts: 10,
         GoroutineHealthThreshold: -1,
         EnableOAuthServiceProvider: true,
+        EnableDynamicClientRegistration: false,
+        DCRRedirectURIAllowlist: [],
         EnableIncomingWebhooks: true,
         EnableOutgoingWebhooks: true,
         EnableOutgoingOAuthConnections: false,
@@ -169,8 +193,9 @@ const defaultServerConfig: AdminConfig = {
         EnableAPIUserDeletion: false,
         EnableAPIPostDeletion: false,
         EnableDesktopLandingPage: true,
+        MinimumDesktopAppVersion: '',
         ExperimentalEnableHardenedMode: false,
-        StrictCSRFEnforcement: true,
+        ExperimentalStrictCSRFEnforcement: false,
         EnableEmailInvitations: false,
         DisableBotsWhenOwnerIsDeactivated: true,
         EnableBotAccountCreation: false,
@@ -183,10 +208,15 @@ const defaultServerConfig: AdminConfig = {
         PersistentNotificationIntervalMinutes: 5,
         PersistentNotificationMaxCount: 6,
         PersistentNotificationMaxRecipients: 5,
+        EnableBurnOnRead: true,
+        BurnOnReadDurationSeconds: 600,
+        BurnOnReadMaximumTimeToLiveSeconds: 604800,
+        BurnOnReadSchedulerFrequencySeconds: 600,
         EnableAPIChannelDeletion: false,
         EnableLocalMode: false,
         LocalModeSocketLocation: '/var/tmp/mattermost_local.socket',
         EnableAWSMetering: false,
+        AWSMeteringTimeoutSeconds: 30,
         SplitKey: '',
         FeatureFlagSyncIntervalSeconds: 30,
         DebugSplit: false,
@@ -237,7 +267,7 @@ const defaultServerConfig: AdminConfig = {
     SqlSettings: {
         DriverName: 'postgres',
         DataSource:
-            'postgres://mmuser:mostest@localhost/mattermost_test?sslmode=disable\u0026connect_timeout=10\u0026binary_parameters=yes',
+            'postgres://mmuser:mostest_password@localhost/mattermost_test?sslmode=disable\u0026connect_timeout=10\u0026binary_parameters=yes',
         DataSourceReplicas: [],
         DataSourceSearchReplicas: [],
         MaxIdleConns: 50,
@@ -247,6 +277,7 @@ const defaultServerConfig: AdminConfig = {
         Trace: false,
         AtRestEncryptKey: '',
         QueryTimeout: 30,
+        AnalyticsQueryTimeout: 300,
         DisableDatabaseSearch: false,
         MigrationsStatementTimeoutSeconds: 100000,
         ReplicaLagSettings: [],
@@ -270,16 +301,11 @@ const defaultServerConfig: AdminConfig = {
     ExperimentalAuditSettings: {
         FileEnabled: false,
         FileName: '',
-        FileMaxSizeMB: 100,
-        FileMaxAgeDays: 0,
-        FileMaxBackups: 0,
-        FileCompress: false,
-        FileMaxQueueSize: 1000,
         AdvancedLoggingJSON: {},
         Certificate: '',
     },
     PasswordSettings: {
-        MinimumLength: 8,
+        MinimumLength: 14,
         Lowercase: false,
         Number: false,
         Uppercase: false,
@@ -297,6 +323,7 @@ const defaultServerConfig: AdminConfig = {
         Directory: './data/',
         EnablePublicLink: false,
         ExtractContent: true,
+        ExtractContentTimeout: 10,
         ArchiveRecursion: false,
         PublicLinkSalt: '',
         InitialFont: 'nunito-bold.ttf',
@@ -352,7 +379,7 @@ const defaultServerConfig: AdminConfig = {
         SendPushNotifications: true,
         PushNotificationServer: 'https://push-test.mattermost.com',
         PushNotificationServerType: 'custom',
-        PushNotificationServerLocation: 'us',
+        PushNotificationServerLocation: 'global',
         PushNotificationContents: 'full',
         PushNotificationBuffer: 1000,
         EnableEmailBatching: false,
@@ -377,6 +404,7 @@ const defaultServerConfig: AdminConfig = {
     PrivacySettings: {
         ShowEmailAddress: true,
         ShowFullName: true,
+        UseAnonymousURLs: false,
     },
     SupportSettings: {
         TermsOfServiceLink: 'https://mattermost.com/pl/terms-of-use/',
@@ -422,6 +450,7 @@ const defaultServerConfig: AdminConfig = {
         DiscoveryEndpoint: '',
         ButtonText: '',
         ButtonColor: '',
+        UsePreferredUsername: false,
     },
     GoogleSettings: {
         Enable: false,
@@ -435,6 +464,7 @@ const defaultServerConfig: AdminConfig = {
         DiscoveryEndpoint: '',
         ButtonText: '',
         ButtonColor: '',
+        UsePreferredUsername: false,
     },
     Office365Settings: {
         Enable: false,
@@ -446,6 +476,7 @@ const defaultServerConfig: AdminConfig = {
         UserAPIEndpoint: 'https://graph.microsoft.com/v1.0/me',
         DiscoveryEndpoint: '',
         DirectoryId: '',
+        UsePreferredUsername: false,
     },
     OpenIdSettings: {
         Enable: false,
@@ -458,6 +489,7 @@ const defaultServerConfig: AdminConfig = {
         DiscoveryEndpoint: '',
         ButtonText: '',
         ButtonColor: '#145DBF',
+        UsePreferredUsername: false,
     },
     LdapSettings: {
         Enable: false,
@@ -556,6 +588,13 @@ const defaultServerConfig: AdminConfig = {
         MobileJailbreakProtection: false,
         MobileEnableSecureFilePreview: false,
         MobileAllowPdfLinkNavigation: false,
+        EnableIntuneMAM: false,
+    },
+    IntuneSettings: {
+        Enable: false,
+        TenantId: '',
+        ClientId: '',
+        AuthService: '',
     },
     CacheSettings: {
         CacheType: 'lru',
@@ -587,6 +626,7 @@ const defaultServerConfig: AdminConfig = {
         ClientSideUserIds: [],
     },
     ExperimentalSettings: {
+        ClientSideCertEnable: false,
         LinkMetadataTimeoutMilliseconds: 5000,
         RestrictSystemAdmin: false,
         EnableSharedChannels: false,
@@ -598,6 +638,7 @@ const defaultServerConfig: AdminConfig = {
         UsersStatusAndProfileFetchingPollIntervalMilliseconds: 3000,
         YoutubeReferrerPolicy: false,
         ExperimentalChannelCategorySorting: false,
+        EnableWatermark: false,
     },
     AnalyticsSettings: {
         MaxUsersForStatistics: 2500,
@@ -609,6 +650,7 @@ const defaultServerConfig: AdminConfig = {
         Password: 'changeme',
         EnableIndexing: false,
         EnableSearching: false,
+        EnableCJKAnalyzers: false,
         EnableAutocomplete: false,
         Sniff: true,
         PostIndexReplicas: 1,
@@ -630,6 +672,7 @@ const defaultServerConfig: AdminConfig = {
         ClientKey: '',
         Trace: '',
         IgnoredPurgeIndexes: '',
+        EnableSearchPublicChannelsWithoutMembership: false,
     },
     DataRetentionSettings: {
         EnableMessageDeletion: false,
@@ -711,6 +754,7 @@ const defaultServerConfig: AdminConfig = {
         AllowEmailAccounts: true,
         EnforceMultifactorAuthentication: false,
         RestrictCreationToDomains: '',
+        EnableGuestMagicLink: false,
     },
     ImageProxySettings: {
         Enable: false,
@@ -752,9 +796,18 @@ const defaultServerConfig: AdminConfig = {
         ExperimentalAuditSettingsSystemConsoleUI: true,
         CustomProfileAttributes: true,
         AttributeBasedAccessControl: true,
-        ContentFlagging: false,
+        PermissionPolicies: false,
+        ContentFlagging: true,
         InteractiveDialogAppsForm: true,
-        ChannelAdminManageABACRules: false,
+        EnableMattermostEntry: true,
+        MobileSSOCodeExchange: false,
+        AutoTranslation: true,
+        BurnOnRead: true,
+        EnableAIPluginBridge: false,
+        EnableAIRecaps: false,
+        IntegratedBoards: false,
+        CJKSearch: false,
+        ManagedChannelCategories: false,
     },
     ImportSettings: {
         Directory: './import',
@@ -784,18 +837,10 @@ const defaultServerConfig: AdminConfig = {
     },
     AccessControlSettings: {
         EnableAttributeBasedAccessControl: false,
-        EnableChannelScopeAccessControl: false,
         EnableUserManagedAttributes: false,
     },
     ContentFlaggingSettings: {
         EnableContentFlagging: false,
-        ReviewerSettings: {
-            CommonReviewers: true,
-            CommonReviewerIds: [],
-            TeamReviewersSetting: {},
-            SystemAdminsAsReviewers: false,
-            TeamAdminsAsReviewers: true,
-        },
         NotificationSettings: {
             EventTargetMapping: {
                 assigned: ['reviewers'],
@@ -806,15 +851,39 @@ const defaultServerConfig: AdminConfig = {
         },
         AdditionalSettings: {
             Reasons: [
-                'Inappropriate content',
-                'Sensitive data',
-                'Security concern',
-                'Harassment or abuse',
-                'Spam or phishing',
+                'Classification mismatch',
+                'Need-to-know violation',
+                'Personally identifiable information (PII) exposure',
+                'Operational security (OPSEC) concern',
+                'Controlled Unclassified Information (CUI) violation',
+                'Unauthorized disclosure',
+                'Other',
             ],
             ReporterCommentRequired: true,
             ReviewerCommentRequired: true,
             HideFlaggedContent: true,
+        },
+        ReviewerSettings: {
+            CommonReviewers: true,
+            CommonReviewerIds: [],
+            TeamReviewersSetting: {},
+            SystemAdminsAsReviewers: false,
+            TeamAdminsAsReviewers: true,
+        },
+    },
+    AutoTranslationSettings: {
+        Enable: false,
+        RestrictDMAndGM: false,
+        Provider: '',
+        TargetLanguages: ['en'],
+        Workers: 6,
+        TimeoutMs: 5000,
+        LibreTranslate: {
+            URL: '',
+            APIKey: '',
+        },
+        Agents: {
+            LLMServiceID: '',
         },
     },
 };

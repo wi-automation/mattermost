@@ -5,6 +5,7 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"path"
@@ -49,10 +50,19 @@ func (ch *Channels) ServePluginRequest(w http.ResponseWriter, r *http.Request) {
 	ch.servePluginRequest(w, r, hooks.ServeHTTP)
 }
 
-func (a *App) ServeInterPluginRequest(w http.ResponseWriter, r *http.Request, sourcePluginId, destinationPluginId string) {
+// ServeInternalPluginRequest handles internal requests to plugins from either core server or other plugins.
+// This is used by the Plugin Bridge to route requests with proper authentication headers.
+//
+// Parameters:
+//   - userID: User ID to set in the authentication header (empty string if no user context)
+//   - w: HTTP response writer
+//   - r: HTTP request (should have URL path set to the endpoint, NOT including plugin ID)
+//   - sourcePluginID: ID of calling plugin (empty string if from core)
+//   - targetPluginID: ID of target plugin to call
+func (a *App) ServeInternalPluginRequest(userID string, w http.ResponseWriter, r *http.Request, sourcePluginID, targetPluginID string) {
 	pluginsEnvironment := a.ch.GetPluginsEnvironment()
 	if pluginsEnvironment == nil {
-		appErr := model.NewAppError("ServeInterPluginRequest", "app.plugin.disabled.app_error", nil, "Plugin environment not found.", http.StatusNotImplemented)
+		appErr := model.NewAppError("ServeInternalPluginRequest", "app.plugin.disabled.app_error", nil, "Plugin environment not found.", http.StatusNotImplemented)
 		a.Log().Error(appErr.Error())
 		w.WriteHeader(appErr.StatusCode)
 		w.Header().Set("Content-Type", "application/json")
@@ -62,11 +72,11 @@ func (a *App) ServeInterPluginRequest(w http.ResponseWriter, r *http.Request, so
 		return
 	}
 
-	hooks, err := pluginsEnvironment.HooksForPlugin(destinationPluginId)
+	hooks, err := pluginsEnvironment.HooksForPlugin(targetPluginID)
 	if err != nil {
-		a.Log().Error("Access to route for non-existent plugin in inter plugin request",
-			mlog.String("source_plugin_id", sourcePluginId),
-			mlog.String("destination_plugin_id", destinationPluginId),
+		a.Log().Error("Access to route for non-existent plugin in internal plugin request",
+			mlog.String("source_plugin_id", sourcePluginID),
+			mlog.String("target_plugin_id", targetPluginID),
 			mlog.String("url", r.URL.String()),
 			mlog.Err(err),
 		)
@@ -79,9 +89,27 @@ func (a *App) ServeInterPluginRequest(w http.ResponseWriter, r *http.Request, so
 		UserAgent: r.UserAgent(),
 	}
 
-	r.Header.Set("Mattermost-Plugin-ID", sourcePluginId)
+	// Set authentication headers - these are trusted because this function is internal
+	// and not exposed to external HTTP routes
+	r.Header.Set("Mattermost-User-Id", userID)
+
+	// Set plugin ID header to identify the caller
+	// Use a special ID for core server calls to distinguish them from plugin-to-plugin calls
+	if sourcePluginID != "" {
+		r.Header.Set("Mattermost-Plugin-ID", sourcePluginID)
+	} else {
+		// Core server call - use special identifier
+		r.Header.Set("Mattermost-Plugin-ID", "com.mattermost.server")
+	}
 
 	hooks.ServeHTTP(context, w, r)
+}
+
+// ServeInterPluginRequest handles inter-plugin HTTP requests.
+// This function does not set user authentication headers, unlike ServeInternalPluginRequest.
+func (a *App) ServeInterPluginRequest(w http.ResponseWriter, r *http.Request, sourcePluginId, destinationPluginId string) {
+	// Call ServeInternalPluginRequest with empty userID since this function doesn't handle user authentication
+	a.ServeInternalPluginRequest("", w, r, sourcePluginId, destinationPluginId)
 }
 
 // ServePluginPublicRequest serves public plugin files
@@ -161,9 +189,6 @@ func (ch *Channels) servePluginRequest(w http.ResponseWriter, r *http.Request, h
 	// Mattermost-Plugin-ID can only be set by inter-plugin requests
 	r.Header.Del("Mattermost-Plugin-ID")
 
-	// Clean Authorization header. The Mattermost-User-Id header is used to indicate authenticated requests.
-	r.Header.Del(model.HeaderAuth)
-
 	// Clean Mattermost-User-Id header. The server sets this header for authenticated requests
 	r.Header.Del("Mattermost-User-Id")
 
@@ -217,14 +242,17 @@ func (ch *Channels) servePluginRequest(w http.ResponseWriter, r *http.Request, h
 		return
 	}
 
+	// If we get to this point, the token resolved to a valid session, and we don't need to remit
+	// the authorization header to the plugin at all. This also prevents the plugin from incorrectly
+	// using the token if MFA or CSRF fail below.
+	r.Header.Del(model.HeaderAuth)
+
 	rctx = rctx.
-		WithLogger(rctx.Logger().With(
-			mlog.String("user_id", session.UserId),
-		)).
+		WithLogFields(mlog.String("user_id", session.UserId)).
 		WithSession(session)
 
 	// If MFA is required and user has not activated it, treat it as unauthenticated
-	if appErr := app.MFARequired(rctx); appErr != nil {
+	if appErr := app.MFARequired(rctx, r.Method); appErr != nil {
 		if appErr.StatusCode == http.StatusInternalServerError {
 			handleInternalServerError(rctx, "Internal server error during MFA validation", err)
 			return
@@ -236,7 +264,18 @@ func (ch *Channels) servePluginRequest(w http.ResponseWriter, r *http.Request, h
 		return
 	}
 
-	if validateCSRFForPluginRequest(rctx, r, session, cookieAuth, *ch.cfgSvc.Config().ServiceSettings.StrictCSRFEnforcement) {
+	maxBodyBytes := *ch.cfgSvc.Config().ServiceSettings.MaximumPayloadSizeBytes + bytes.MinRead
+	csrfValid, err := validateCSRFForPluginRequest(rctx, w, r, session, cookieAuth, *ch.cfgSvc.Config().ServiceSettings.ExperimentalStrictCSRFEnforcement, maxBodyBytes)
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+			return
+		}
+		handleInternalServerError(rctx, "Failed to read request body for plugin CSRF validation", err)
+		return
+	}
+	if csrfValid {
 		r.Header.Set("Mattermost-User-Id", session.UserId)
 		context.SessionId = session.Id
 	} else {
@@ -247,18 +286,19 @@ func (ch *Channels) servePluginRequest(w http.ResponseWriter, r *http.Request, h
 }
 
 // validateCSRFForPluginRequest validates CSRF token for plugin requests
-func validateCSRFForPluginRequest(rctx request.CTX, r *http.Request, session *model.Session, cookieAuth bool, strictCSRFEnforcement bool) bool {
+func validateCSRFForPluginRequest(rctx request.CTX, w http.ResponseWriter, r *http.Request, session *model.Session, cookieAuth bool, strictCSRFEnforcement bool, maxBodyBytes int64) (bool, error) {
 	// Skip CSRF check for non-cookie auth or GET requests
 	if !cookieAuth || r.Method == http.MethodGet {
-		return true
+		return true, nil
 	}
 
 	csrfTokenFromClient := r.Header.Get(model.HeaderCsrfToken)
 
 	if csrfTokenFromClient == "" {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		bodyBytes, err := io.ReadAll(r.Body)
 		if err != nil {
-			rctx.Logger().Warn("Failed to read request body for plugin request", mlog.Err(err))
+			return false, err
 		}
 		r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		if err := r.ParseForm(); err != nil {
@@ -270,7 +310,7 @@ func validateCSRFForPluginRequest(rctx request.CTX, r *http.Request, session *mo
 
 	expectedToken := session.GetCSRF()
 	if csrfTokenFromClient == expectedToken {
-		return true
+		return true, nil
 	}
 
 	// ToDo(DSchalla) 2019/01/04: Remove after deprecation period and only allow CSRF Header (MM-13657)
@@ -278,13 +318,13 @@ func validateCSRFForPluginRequest(rctx request.CTX, r *http.Request, session *mo
 		csrfErrorMessage := "CSRF Check failed for request - Please migrate your plugin to either send a CSRF Header or Form Field, XMLHttpRequest is deprecated"
 		if strictCSRFEnforcement {
 			rctx.Logger().Warn(csrfErrorMessage, mlog.String("session_id", session.Id))
-			return false
+			return false, nil
 		}
 
 		// Allow XMLHttpRequest for backward compatibility when not strict
 		rctx.Logger().Debug(csrfErrorMessage, mlog.String("session_id", session.Id))
-		return true
+		return true, nil
 	}
 
-	return false
+	return false, nil
 }

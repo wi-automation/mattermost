@@ -62,17 +62,21 @@ func doPostAction(c *Context, w http.ResponseWriter, r *http.Request) {
 			c.Err = model.NewAppError("DoPostAction", "api.post.do_action.action_integration.app_error", nil, "", http.StatusBadRequest).Wrap(err)
 			return
 		}
+		if cookie.PostId != c.Params.PostId {
+			c.SetPermissionError(model.PermissionReadChannelContent)
+			return
+		}
 		channel, err := c.App.GetChannel(c.AppContext, cookie.ChannelId)
 		if err != nil {
 			c.Err = err
 			return
 		}
-		if !c.App.SessionHasPermissionToReadChannel(c.AppContext, *c.AppContext.Session(), channel) {
+		if ok, _ := c.App.SessionHasPermissionToReadChannel(c.AppContext, *c.AppContext.Session(), channel); !ok {
 			c.SetPermissionError(model.PermissionReadChannelContent)
 			return
 		}
 	} else {
-		if !c.App.SessionHasPermissionToChannelByPost(*c.AppContext.Session(), c.Params.PostId, model.PermissionReadChannelContent) {
+		if ok, _ := c.App.SessionHasPermissionToReadPost(c.AppContext, *c.AppContext.Session(), c.Params.PostId); !ok {
 			c.SetPermissionError(model.PermissionReadChannelContent)
 			return
 		}
@@ -136,7 +140,7 @@ func submitDialog(c *Context, w http.ResponseWriter, r *http.Request) {
 		c.Err = err
 		return
 	}
-	if !c.App.SessionHasPermissionToReadChannel(c.AppContext, *c.AppContext.Session(), channel) {
+	if ok, _ := c.App.SessionHasPermissionToReadChannel(c.AppContext, *c.AppContext.Session(), channel); !ok {
 		c.SetPermissionError(model.PermissionReadChannelContent)
 		return
 	}
@@ -189,7 +193,7 @@ func lookupDialog(c *Context, w http.ResponseWriter, r *http.Request) {
 		c.Err = err
 		return
 	}
-	if !c.App.SessionHasPermissionToReadChannel(c.AppContext, *c.AppContext.Session(), channel) {
+	if ok, _ := c.App.SessionHasPermissionToReadChannel(c.AppContext, *c.AppContext.Session(), channel); !ok {
 		c.SetPermissionError(model.PermissionReadChannelContent)
 		return
 	}

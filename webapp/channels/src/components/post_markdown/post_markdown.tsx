@@ -9,7 +9,7 @@ import type {Post} from '@mattermost/types/posts';
 import {Posts} from 'mattermost-redux/constants';
 
 import Markdown from 'components/markdown';
-import DataSpillageReport from 'components/post_view/data_spillage_report/data_spillage_report';
+import {DataSpillageReport} from 'components/post_view/data_spillage_report/data_spillage_report';
 
 import {PostTypes} from 'utils/constants';
 import {isChannelNamesMap, type TextFormattingOptions} from 'utils/text_formatting';
@@ -111,8 +111,6 @@ export default class PostMarkdown extends React.PureComponent<Props> {
             );
         }
 
-        // Proxy images if we have an image proxy and the server hasn't already rewritten the this.props.post's image URLs.
-        const proxyImages = !this.props.post || !this.props.post.message_source || this.props.post.message === this.props.post.message_source;
         const channelNamesMap = isChannelNamesMap(this.props.post?.props?.channel_mentions) ? this.props.post?.props?.channel_mentions : undefined;
 
         this.props.pluginHooks?.forEach((o) => {
@@ -143,7 +141,6 @@ export default class PostMarkdown extends React.PureComponent<Props> {
             <Markdown
                 imageProps={this.props.imageProps}
                 message={message}
-                proxyImages={proxyImages}
                 mentionKeys={this.props.mentionKeys}
                 highlightKeys={highlightKeys}
                 options={options}

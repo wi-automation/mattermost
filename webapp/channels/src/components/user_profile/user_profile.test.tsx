@@ -1,15 +1,14 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-import {shallow} from 'enzyme';
 import React from 'react';
+import {IntlProvider} from 'react-intl';
 
 import type {UserProfile as UserProfileType} from '@mattermost/types/users';
 
 import {Preferences} from 'mattermost-redux/constants';
 
-import ProfilePopover from 'components/profile_popover';
-import BotTag from 'components/widgets/tag/bot_tag';
+import {render} from 'tests/react_testing_utils';
 
 import UserProfile from './user_profile';
 
@@ -30,34 +29,38 @@ describe('components/UserProfile', () => {
     };
 
     test('should match snapshot', () => {
-        const wrapper = shallow(<UserProfile {...baseProps}/>);
-        expect(wrapper).toMatchSnapshot();
+        const {container} = render(<UserProfile {...baseProps}/>);
+        expect(container).toMatchSnapshot();
     });
 
     test('keeps bot badges outside message headers by default', () => {
         const user = {...baseProps.user, is_bot: true};
-        const wrapper = shallow(
-            <UserProfile
-                {...baseProps}
-                user={user}
-            />,
+        const {container} = render(
+            <IntlProvider locale='en'>
+                <UserProfile
+                    {...baseProps}
+                    user={user}
+                />
+            </IntlProvider>,
         );
 
-        expect(wrapper.find(BotTag)).toHaveLength(1);
+        expect(container.querySelector('.BotTag')).not.toBeNull();
     });
 
     test('hides a bot badge when requested by a message header', () => {
         const user = {...baseProps.user, is_bot: true};
-        const wrapper = shallow(
-            <UserProfile
-                {...baseProps}
-                user={user}
-                hideBotTag={true}
-            />,
+        const {container} = render(
+            <IntlProvider locale='en'>
+                <UserProfile
+                    {...baseProps}
+                    user={user}
+                    hideBotTag={true}
+                />
+            </IntlProvider>,
         );
 
-        expect(wrapper.find(BotTag)).toHaveLength(0);
-        expect(wrapper.find(ProfilePopover).prop('children')).toBe('nickname');
+        expect(container.querySelector('.BotTag')).toBeNull();
+        expect(container.textContent).toContain('nickname');
     });
 
     test('should match snapshot, with colorization', () => {
@@ -66,8 +69,8 @@ describe('components/UserProfile', () => {
             colorize: true,
         };
 
-        const wrapper = shallow(<UserProfile {...props}/>);
-        expect(wrapper).toMatchSnapshot();
+        const {container} = render(<UserProfile {...props}/>);
+        expect(container).toMatchSnapshot();
     });
 
     test('should match snapshot, when user is shared', () => {
@@ -76,27 +79,27 @@ describe('components/UserProfile', () => {
             isShared: true,
         };
 
-        const wrapper = shallow(<UserProfile {...props}/>);
-        expect(wrapper).toMatchSnapshot();
+        const {container} = render(<UserProfile {...props}/>);
+        expect(container).toMatchSnapshot();
     });
 
     test('should match snapshot, when popover is disabled', () => {
-        const wrapper = shallow(
+        const {container} = render(
             <UserProfile
                 {...baseProps}
                 disablePopover={true}
             />,
         );
-        expect(wrapper).toMatchSnapshot();
+        expect(container).toMatchSnapshot();
     });
 
     test('should match snapshot, when displayUsername is enabled', () => {
-        const wrapper = shallow(
+        const {container} = render(
             <UserProfile
                 {...baseProps}
                 displayUsername={true}
             />,
         );
-        expect(wrapper).toMatchSnapshot();
+        expect(container).toMatchSnapshot();
     });
 });

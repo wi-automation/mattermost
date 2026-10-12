@@ -227,7 +227,7 @@ func TestHandlerServeCSRFToken(t *testing.T) {
 	// Fallback Behavior Used - Success expected
 	// ToDo (DSchalla) 2019/01/04: Remove once legacy CSRF Handling is removed
 	th.App.UpdateConfig(func(config *model.Config) {
-		*config.ServiceSettings.StrictCSRFEnforcement = false
+		*config.ServiceSettings.ExperimentalStrictCSRFEnforcement = false
 	})
 	request = httptest.NewRequest("POST", "/api/v4/test", nil)
 	request.AddCookie(cookie)
@@ -244,7 +244,7 @@ func TestHandlerServeCSRFToken(t *testing.T) {
 	// Fallback Behavior Used with Strict Enforcement - Failure Expected
 	// ToDo (DSchalla) 2019/01/04: Remove once legacy CSRF Handling is removed
 	th.App.UpdateConfig(func(config *model.Config) {
-		*config.ServiceSettings.StrictCSRFEnforcement = true
+		*config.ServiceSettings.ExperimentalStrictCSRFEnforcement = true
 	})
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -587,12 +587,15 @@ func TestHandlerServeInvalidToken(t *testing.T) {
 
 func TestHandlerServeCSRFFailureClearsAuthCookie(t *testing.T) {
 	testCases := []struct {
-		Description                   string
-		SiteURL                       string
-		ExpectedSetCookieHeaderRegexp string
+		Description                       string
+		SiteURL                           string
+		ExpectedSetCookieHeaderRegexp     string
+		ExperimentalStrictCSRFEnforcement bool
 	}{
-		{"no subpath", "http://localhost:8065", "^MMAUTHTOKEN=; Path=/"},
-		{"subpath", "http://localhost:8065/subpath", "^MMAUTHTOKEN=; Path=/subpath"},
+		{"no subpath", "http://localhost:8065", "^MMAUTHTOKEN=; Path=/", false},
+		{"subpath", "http://localhost:8065/subpath", "^MMAUTHTOKEN=; Path=/subpath", false},
+		{"no subpath", "http://localhost:8065", "^MMAUTHTOKEN=; Path=/", true},
+		{"subpath", "http://localhost:8065/subpath", "^MMAUTHTOKEN=; Path=/subpath", true},
 	}
 
 	for _, tc := range testCases {
@@ -601,6 +604,7 @@ func TestHandlerServeCSRFFailureClearsAuthCookie(t *testing.T) {
 
 			th.App.UpdateConfig(func(cfg *model.Config) {
 				*cfg.ServiceSettings.SiteURL = tc.SiteURL
+				*cfg.ServiceSettings.ExperimentalStrictCSRFEnforcement = tc.ExperimentalStrictCSRFEnforcement
 			})
 
 			session := &model.Session{
@@ -635,10 +639,14 @@ func TestHandlerServeCSRFFailureClearsAuthCookie(t *testing.T) {
 			request.Header.Add(model.HeaderRequestedWith, model.HeaderRequestedWithXML)
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
-			require.Equal(t, http.StatusUnauthorized, response.Code)
 
-			cookies := response.Header().Get("Set-Cookie")
-			assert.Regexp(t, tc.ExpectedSetCookieHeaderRegexp, cookies)
+			if tc.ExperimentalStrictCSRFEnforcement {
+				require.Equal(t, http.StatusUnauthorized, response.Code)
+				cookies := response.Header().Get("Set-Cookie")
+				assert.Regexp(t, tc.ExpectedSetCookieHeaderRegexp, cookies)
+			} else {
+				require.Equal(t, http.StatusOK, response.Code)
+			}
 		})
 	}
 }
@@ -674,8 +682,58 @@ func TestCheckCSRFToken(t *testing.T) {
 		assert.Nil(t, c.Err)
 	})
 
-	t.Run("should not allow a POST request with an X-Requested-With header", func(t *testing.T) {
+	t.Run("should allow a POST request with an X-Requested-With header", func(t *testing.T) {
 		th := SetupWithStoreMock(t)
+
+		h := &Handler{
+			RequireSession: true,
+			TrustRequester: false,
+		}
+
+		token := "token"
+		tokenLocation := app.TokenLocationCookie
+
+		c := &Context{
+			App:        th.App,
+			Logger:     th.App.Log(),
+			AppContext: th.Context,
+		}
+		r, _ := http.NewRequest(http.MethodPost, "", nil)
+		r.Header.Set(model.HeaderRequestedWith, model.HeaderRequestedWithXML)
+		session := &model.Session{
+			Props: map[string]string{
+				"csrf": token,
+			},
+		}
+
+		checked, passed := h.checkCSRFToken(c, r, tokenLocation, session)
+
+		assert.True(t, checked)
+		assert.True(t, passed)
+		assert.Nil(t, c.Err)
+	})
+
+	t.Run("should not allow a POST request with an X-Requested-With header with strict CSRF enforcement enabled", func(t *testing.T) {
+		th := SetupWithStoreMock(t)
+
+		mockStore := th.App.Srv().Store().(*mocks.Store)
+		mockUserStore := mocks.UserStore{}
+		mockUserStore.On("Count", mock.Anything).Return(int64(10), nil)
+		mockPostStore := mocks.PostStore{}
+		mockPostStore.On("GetMaxPostSize").Return(65535, nil)
+		mockSystemStore := mocks.SystemStore{}
+		mockSystemStore.On("GetByName", "UpgradedFromTE").Return(&model.System{Name: "UpgradedFromTE", Value: "false"}, nil)
+		mockSystemStore.On("GetByName", "InstallationDate").Return(&model.System{Name: "InstallationDate", Value: "10"}, nil)
+		mockSystemStore.On("GetByName", "FirstServerRunTimestamp").Return(&model.System{Name: "FirstServerRunTimestamp", Value: "10"}, nil)
+
+		mockStore.On("User").Return(&mockUserStore)
+		mockStore.On("Post").Return(&mockPostStore)
+		mockStore.On("System").Return(&mockSystemStore)
+		mockStore.On("GetDBSchemaVersion").Return(1, nil)
+
+		th.App.UpdateConfig(func(cfg *model.Config) {
+			*cfg.ServiceSettings.ExperimentalStrictCSRFEnforcement = true
+		})
 
 		h := &Handler{
 			RequireSession: true,
@@ -1061,5 +1119,191 @@ func TestHandlerServeHTTPRequestPayloadLimit(t *testing.T) {
 		handler.ServeHTTP(response, request)
 
 		assert.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
+	})
+}
+
+func TestHandleContextErrorZeroStatusCode(t *testing.T) {
+	t.Run("should set StatusCode to 500 when AppError has zero StatusCode", func(t *testing.T) {
+		th := SetupWithStoreMock(t)
+
+		appErr := &model.AppError{
+			Message:       "Cannot add a permission that is restricted by the team or system permission scheme",
+			StatusCode:    0,
+			Id:            "test.error",
+			Where:         "TestFunction",
+			DetailedError: "test details",
+		}
+
+		c := &Context{
+			App:        th.App,
+			AppContext: th.Context,
+			Logger:     th.App.Log(),
+			Err:        appErr,
+		}
+
+		request := httptest.NewRequest("POST", "/api/v4/test", nil)
+		response := httptest.NewRecorder()
+
+		h := Handler{
+			Srv: th.Server,
+		}
+
+		h.handleContextError(c, response, request)
+
+		assert.Equal(t, http.StatusInternalServerError, c.Err.StatusCode)
+		assert.Equal(t, http.StatusInternalServerError, response.Code)
+	})
+
+	t.Run("should not modify StatusCode when AppError has valid StatusCode", func(t *testing.T) {
+		th := SetupWithStoreMock(t)
+
+		appErr := model.NewAppError("TestFunction", "test.error", nil, "test details", http.StatusBadRequest)
+
+		c := &Context{
+			App:        th.App,
+			AppContext: th.Context,
+			Logger:     th.App.Log(),
+			Err:        appErr,
+		}
+
+		request := httptest.NewRequest("POST", "/api/v4/test", nil)
+		response := httptest.NewRecorder()
+
+		h := Handler{
+			Srv: th.Server,
+		}
+
+		h.handleContextError(c, response, request)
+
+		assert.Equal(t, http.StatusBadRequest, c.Err.StatusCode)
+		assert.Equal(t, http.StatusBadRequest, response.Code)
+	})
+}
+
+func TestTokenDigest(t *testing.T) {
+	token := model.NewId()
+	digest := tokenDigest(token)
+
+	assert.NotEmpty(t, digest)
+	assert.NotContains(t, digest, token)
+	assert.Equal(t, digest, tokenDigest(token), "should be stable for the same input")
+	assert.NotEqual(t, digest, tokenDigest(model.NewId()), "should differ for different inputs")
+	assert.Equal(t, "<none>", tokenDigest(""))
+}
+
+func TestHandlerServeDoesNotLogRawToken(t *testing.T) {
+	newHandler := func(th *TestHelper) Handler {
+		web := New(th.Server)
+
+		return Handler{
+			Srv:            web.srv,
+			HandleFunc:     handlerForCSRFToken,
+			RequireSession: true,
+			TrustRequester: false,
+			RequireMfa:     false,
+			IsStatic:       false,
+		}
+	}
+
+	newSession := func(t *testing.T, th *TestHelper, isOAuth bool) *model.Session {
+		session := &model.Session{
+			UserId:   th.BasicUser.Id,
+			CreateAt: model.GetMillis(),
+			Roles:    model.SystemUserRoleId,
+			IsOAuth:  isOAuth,
+		}
+		session.GenerateCSRF()
+		th.App.SetSessionExpireInHours(session, 24)
+
+		session, appErr := th.App.CreateSession(th.Context, session)
+		require.Nil(t, appErr)
+
+		return session
+	}
+
+	captureLogs := func(t *testing.T, th *TestHelper) *mlog.Buffer {
+		buffer := &mlog.Buffer{}
+		require.NoError(t, mlog.AddWriterTarget(th.TestLogger, buffer, true, mlog.StdAll...))
+
+		return buffer
+	}
+
+	t.Run("expired or unknown session token", func(t *testing.T) {
+		th := Setup(t).InitBasic(t)
+		buffer := captureLogs(t, th)
+
+		token := model.NewId()
+		handler := newHandler(th)
+
+		request := httptest.NewRequest("GET", "/api/v4/test", nil)
+		request.AddCookie(&http.Cookie{Name: model.SessionCookieToken, Value: token})
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+
+		require.Equal(t, http.StatusUnauthorized, response.Code)
+		require.NoError(t, th.TestLogger.Flush())
+
+		logs := buffer.String()
+		assert.NotContains(t, logs, token)
+		assert.Contains(t, logs, tokenDigest(token))
+	})
+
+	t.Run("session token provided in the query string", func(t *testing.T) {
+		th := Setup(t).InitBasic(t)
+		buffer := captureLogs(t, th)
+
+		session := newSession(t, th, false)
+		handler := newHandler(th)
+
+		request := httptest.NewRequest("GET", "/api/v4/test?access_token="+session.Token, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+
+		require.Equal(t, http.StatusUnauthorized, response.Code)
+		require.NoError(t, th.TestLogger.Flush())
+
+		logs := buffer.String()
+		assert.NotContains(t, logs, session.Token)
+		assert.Contains(t, logs, tokenDigest(session.Token))
+	})
+
+	t.Run("failed CSRF check", func(t *testing.T) {
+		th := Setup(t).InitBasic(t)
+		buffer := captureLogs(t, th)
+
+		session := newSession(t, th, false)
+		handler := newHandler(th)
+
+		request := httptest.NewRequest("POST", "/api/v4/test", nil)
+		request.AddCookie(&http.Cookie{Name: model.SessionCookieToken, Value: session.Token})
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+
+		require.Equal(t, http.StatusUnauthorized, response.Code)
+		require.NoError(t, th.TestLogger.Flush())
+
+		logs := buffer.String()
+		assert.NotContains(t, logs, session.Token)
+		assert.Contains(t, logs, "Appears to be a CSRF attempt")
+		assert.Contains(t, logs, tokenDigest(session.Token))
+	})
+
+	t.Run("valid session is served without logging the token", func(t *testing.T) {
+		th := Setup(t).InitBasic(t)
+		buffer := captureLogs(t, th)
+
+		session := newSession(t, th, false)
+		handler := newHandler(th)
+
+		request := httptest.NewRequest("POST", "/api/v4/test", nil)
+		request.AddCookie(&http.Cookie{Name: model.SessionCookieToken, Value: session.Token})
+		request.Header.Set(model.HeaderCsrfToken, session.GetCSRF())
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+
+		require.Equal(t, http.StatusOK, response.Code)
+		require.NoError(t, th.TestLogger.Flush())
+
+		assert.NotContains(t, buffer.String(), session.Token)
 	})
 }

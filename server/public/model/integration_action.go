@@ -37,7 +37,23 @@ const (
 	DialogElementTextareaMaxLength    = 3000
 	DialogElementSelectMaxLength      = 3000
 	DialogElementBoolMaxLength        = 150
+	DefaultTimeIntervalMinutes        = 60 // Default time interval for DateTime fields
+
+	// Go date/time format constants
+	ISODateFormat                 = "2006-01-02"                // YYYY-MM-DD
+	ISODateTimeFormat             = "2006-01-02T15:04:05Z"      // RFC3339 UTC
+	ISODateTimeWithTimezoneFormat = "2006-01-02T15:04:05-07:00" // RFC3339 with timezone
+	ISODateTimeNoTimezoneFormat   = "2006-01-02T15:04:05"       // ISO datetime without timezone
+	ISODateTimeNoSecondsFormat    = "2006-01-02T15:04"          // ISO datetime without seconds
 )
+
+// Common datetime formats used by both date and datetime validation
+var commonDateTimeFormats = []string{
+	ISODateTimeFormat,             // RFC3339 UTC
+	ISODateTimeWithTimezoneFormat, // RFC3339 with timezone
+	ISODateTimeNoTimezoneFormat,   // ISO datetime without timezone
+	ISODateTimeNoSecondsFormat,    // ISO datetime without seconds
+}
 
 var PostActionRetainPropKeys = []string{PostPropsFromWebhook, PostPropsOverrideUsername, PostPropsOverrideIconURL}
 
@@ -61,6 +77,9 @@ type PostAction struct {
 
 	// The text on the button, or in the select placeholder.
 	Name string `json:"name,omitempty"`
+
+	// Tooltip text displayed on hover.
+	Tooltip string `json:"tooltip,omitempty"`
 
 	// If the action is disabled.
 	Disabled bool `json:"disabled,omitempty"`
@@ -316,6 +335,17 @@ type Dialog struct {
 	SubmitLabel      string          `json:"submit_label"`
 	NotifyOnCancel   bool            `json:"notify_on_cancel"`
 	State            string          `json:"state"`
+	SourceURL        string          `json:"source_url,omitempty"`
+}
+
+// DialogDateTimeConfig groups date/datetime specific configuration
+type DialogDateTimeConfig struct {
+	// TimeInterval: Minutes between time options in dropdown (default: 60)
+	TimeInterval int `json:"time_interval,omitempty"`
+	// LocationTimezone: IANA timezone for display (e.g., "America/Denver", "Asia/Tokyo")
+	LocationTimezone string `json:"location_timezone,omitempty"`
+	// AllowManualTimeEntry: Allow manual text entry for time instead of dropdown
+	AllowManualTimeEntry bool `json:"allow_manual_time_entry,omitempty"`
 }
 
 type DialogElement struct {
@@ -333,6 +363,15 @@ type DialogElement struct {
 	DataSourceURL string               `json:"data_source_url,omitempty"`
 	Options       []*PostActionOptions `json:"options"`
 	MultiSelect   bool                 `json:"multiselect"`
+	Refresh       bool                 `json:"refresh,omitempty"`
+
+	// Date/datetime field configuration
+	DateTimeConfig *DialogDateTimeConfig `json:"datetime_config,omitempty"`
+
+	// Simple date/datetime configuration (fallback when datetime_config not provided)
+	MinDate      string `json:"min_date,omitempty"`
+	MaxDate      string `json:"max_date,omitempty"`
+	TimeInterval int    `json:"time_interval,omitempty"`
 }
 
 type OpenDialogRequest struct {
@@ -353,9 +392,48 @@ type SubmitDialogRequest struct {
 	Cancelled  bool           `json:"cancelled"`
 }
 
+type SubmitDialogResponseType string
+
+const (
+	SubmitDialogResponseTypeEmpty    SubmitDialogResponseType = ""
+	SubmitDialogResponseTypeOK       SubmitDialogResponseType = "ok"
+	SubmitDialogResponseTypeForm     SubmitDialogResponseType = "form"
+	SubmitDialogResponseTypeNavigate SubmitDialogResponseType = "navigate"
+)
+
 type SubmitDialogResponse struct {
 	Error  string            `json:"error,omitempty"`
 	Errors map[string]string `json:"errors,omitempty"`
+	Type   string            `json:"type,omitempty"`
+	Form   *Dialog           `json:"form,omitempty"`
+}
+
+func (r *SubmitDialogResponse) IsValid() error {
+	// If Error or Errors are set, this is valid and everything else is ignored
+	if r.Error != "" || len(r.Errors) > 0 {
+		return nil
+	}
+
+	// Validate Type field and handle Form field appropriately for each type
+	switch SubmitDialogResponseType(r.Type) {
+	case SubmitDialogResponseTypeEmpty, SubmitDialogResponseTypeOK, SubmitDialogResponseTypeNavigate:
+		// Completion types - Form field should be nil
+		if r.Form != nil {
+			return errors.Errorf("form field must be nil for type %q", r.Type)
+		}
+	case SubmitDialogResponseTypeForm:
+		// Continuation type - Form field is required and must be valid
+		if r.Form == nil {
+			return errors.New("form field is required for form type")
+		}
+		if err := r.Form.IsValid(); err != nil {
+			return errors.Wrap(err, "invalid form")
+		}
+	default:
+		return errors.Errorf("invalid type %q, must be one of: empty, ok, form, navigate", r.Type)
+	}
+
+	return nil
 }
 
 // DialogSelectOption represents an option in a select dropdown for dialogs
@@ -369,6 +447,19 @@ type LookupDialogResponse struct {
 	Items []DialogSelectOption `json:"items"`
 }
 
+// signForGenerateTriggerId wraps the signing operation with panic recovery
+// to handle invalid signers that may cause panics in the crypto package
+func signForGenerateTriggerId(s crypto.Signer, digest []byte, opts crypto.SignerOpts) (signature []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			signature = nil
+			err = fmt.Errorf("invalid signing key: %v", r)
+		}
+	}()
+
+	return s.Sign(rand.Reader, digest, opts)
+}
+
 func GenerateTriggerId(userId string, s crypto.Signer) (string, string, *AppError) {
 	clientTriggerId := NewId()
 	triggerData := strings.Join([]string{clientTriggerId, userId, strconv.FormatInt(GetMillis(), 10)}, ":") + ":"
@@ -376,7 +467,7 @@ func GenerateTriggerId(userId string, s crypto.Signer) (string, string, *AppErro
 	h := crypto.SHA256
 	sum := h.New()
 	sum.Write([]byte(triggerData))
-	signature, err := s.Sign(rand.Reader, sum.Sum(nil), h)
+	signature, err := signForGenerateTriggerId(s, sum.Sum(nil), h)
 	if err != nil {
 		return "", "", NewAppError("GenerateTriggerId", "interactive_message.generate_trigger_id.signing_failed", nil, "", http.StatusInternalServerError).Wrap(err)
 	}
@@ -575,6 +666,29 @@ func (e *DialogElement) IsValid() error {
 			multiErr = multierror.Append(multiErr, errors.Errorf("default value %q doesn't exist in options ", e.Default))
 		}
 
+	case "date":
+		multiErr = multierror.Append(multiErr, checkMaxLength("Default", e.Default, DialogElementTextMaxLength))
+		multiErr = multierror.Append(multiErr, checkMaxLength("Placeholder", e.Placeholder, DialogElementTextMaxLength))
+		multiErr = multierror.Append(multiErr, validateDateFormat(e.Default))
+		multiErr = multierror.Append(multiErr, validateDateFormat(e.MinDate))
+		multiErr = multierror.Append(multiErr, validateDateFormat(e.MaxDate))
+
+	case "datetime":
+		multiErr = multierror.Append(multiErr, checkMaxLength("Default", e.Default, DialogElementTextMaxLength))
+		multiErr = multierror.Append(multiErr, checkMaxLength("Placeholder", e.Placeholder, DialogElementTextMaxLength))
+		multiErr = multierror.Append(multiErr, validateDateTimeFormat(e.Default))
+		multiErr = multierror.Append(multiErr, validateDateOrDateTimeFormat(e.MinDate))
+		multiErr = multierror.Append(multiErr, validateDateOrDateTimeFormat(e.MaxDate))
+		// Validate time_interval for datetime fields (0 means omitted — treated as default)
+		timeInterval := e.TimeInterval
+		if timeInterval != 0 {
+			if timeInterval < 1 || timeInterval > 1440 {
+				multiErr = multierror.Append(multiErr, errors.Errorf("time_interval must be between 1 and 1440 minutes, got %d", timeInterval))
+			} else if 1440%timeInterval != 0 {
+				multiErr = multierror.Append(multiErr, errors.Errorf("time_interval must be a divisor of 1440 (24 hours * 60 minutes) to create valid time intervals, got %d", timeInterval))
+			}
+		}
+
 	default:
 		multiErr = multierror.Append(multiErr, errors.Errorf("invalid element type: %q", e.Type))
 	}
@@ -620,6 +734,79 @@ func isMultiSelectDefaultInOptions(defaultValue string, options []*PostActionOpt
 	return true
 }
 
+// validateRelativePattern validates relative date patterns like +1d, +2w, +1m, +2H, +30M, +90S
+// Case-sensitive: d=days, w=weeks, m=months, H=hours, M=minutes, S=seconds
+func validateRelativePattern(value string) bool {
+	if len(value) < 3 || len(value) > 5 || (value[0] != '+' && value[0] != '-') {
+		return false
+	}
+
+	lastChar := value[len(value)-1]
+	if !strings.ContainsRune("dwmHMS", rune(lastChar)) {
+		return false
+	}
+
+	numberPart := value[1 : len(value)-1]
+	_, err := strconv.Atoi(numberPart)
+	return err == nil
+}
+
+// isValidRelativeFormat checks if a string matches relative date patterns
+func isValidRelativeFormat(value string) bool {
+	relativeFormats := []string{"today", "tomorrow", "yesterday"}
+	return slices.Contains(relativeFormats, value) || validateRelativePattern(value)
+}
+
+// validateDateFormat validates date strings: ISO date, datetime (with warning), or relative formats
+func validateDateFormat(dateStr string) error {
+	if dateStr == "" {
+		return nil
+	}
+
+	if isValidRelativeFormat(dateStr) {
+		return nil
+	}
+	if _, err := time.Parse(ISODateFormat, dateStr); err == nil {
+		return nil
+	}
+
+	for _, format := range commonDateTimeFormats {
+		if parsedTime, err := time.Parse(format, dateStr); err == nil {
+			dateOnly := parsedTime.Format(ISODateFormat)
+			return fmt.Errorf("date field received datetime format %q, only date portion %q will be used. Consider using date format instead", dateStr, dateOnly)
+		}
+	}
+
+	return fmt.Errorf("invalid date format: %q, expected ISO format (YYYY-MM-DD), datetime format, or relative format", dateStr)
+}
+
+// validateDateTimeFormat validates datetime strings: ISO datetime or relative formats
+func validateDateTimeFormat(dateTimeStr string) error {
+	if dateTimeStr == "" || isValidRelativeFormat(dateTimeStr) {
+		return nil
+	}
+
+	for _, format := range commonDateTimeFormats {
+		if _, err := time.Parse(format, dateTimeStr); err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("invalid datetime format: %q, expected ISO format (YYYY-MM-DDTHH:MM:SSZ) or relative format", dateTimeStr)
+}
+
+func validateDateOrDateTimeFormat(value string) error {
+	dateErr := validateDateFormat(value)
+	if dateErr == nil {
+		return nil
+	}
+	dateTimeErr := validateDateTimeFormat(value)
+	if dateTimeErr == nil {
+		return nil
+	}
+	return fmt.Errorf("invalid date or datetime format: %q, expected ISO date (YYYY-MM-DD), datetime (YYYY-MM-DDTHH:MM:SSZ), or relative format", value)
+}
+
 func checkMaxLength(fieldName string, field string, maxLength int) error {
 	// DisplayName and Name are required fields
 	if fieldName == "DisplayName" || fieldName == "Name" {
@@ -662,7 +849,7 @@ func (o *Post) GenerateActionIds() {
 	if o.GetProp(PostPropsAttachments) != nil {
 		o.AddProp(PostPropsAttachments, o.Attachments())
 	}
-	if attachments, ok := o.GetProp(PostPropsAttachments).([]*SlackAttachment); ok {
+	if attachments, ok := o.GetProp(PostPropsAttachments).([]*MessageAttachment); ok {
 		for _, attachment := range attachments {
 			for _, action := range attachment.Actions {
 				if action != nil && action.Id == "" {

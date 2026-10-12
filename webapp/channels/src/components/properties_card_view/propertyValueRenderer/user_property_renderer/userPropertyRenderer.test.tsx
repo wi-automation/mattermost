@@ -32,7 +32,6 @@ describe('UserPropertyRenderer', () => {
                 },
                 profilesInChannel: {},
                 profilesNotInChannel: {},
-                profilesWithoutTeam: new Set(),
                 profilesInTeam: {},
                 profilesNotInTeam: {},
                 statuses: {},
@@ -109,7 +108,6 @@ describe('UserPropertyRenderer', () => {
             renderWithContext(
                 <UserPropertyRenderer
                     field={editableField}
-                    value={mockValue}
                 />,
                 baseState,
             );

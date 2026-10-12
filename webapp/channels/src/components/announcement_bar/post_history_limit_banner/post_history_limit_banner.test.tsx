@@ -8,7 +8,7 @@ import type {DeepPartial} from '@mattermost/types/utilities';
 import {savePreferences} from 'mattermost-redux/actions/preferences';
 import {General} from 'mattermost-redux/constants';
 
-import {fireEvent, renderWithContext, screen} from 'tests/react_testing_utils';
+import {renderWithContext, screen, userEvent} from 'tests/react_testing_utils';
 import {Preferences} from 'utils/constants';
 import {TestHelper} from 'utils/test_helper';
 import {generateId} from 'utils/utils';
@@ -46,7 +46,7 @@ const currentUserId = 'current_user';
 const postHistoryLimit = 10000;
 const lastAccessiblePostTime = new Date('2021-12-31T12:00:00.000Z').getTime();
 
-const bannerText = `${postHistoryLimit.toLocaleString()}-message limit reached. Messages sent before December 31, 2021 are hidden. Upgrade to restore access`;
+const bannerText = `${postHistoryLimit.toLocaleString()}-message limit reached. Messages sent before December 31, 2021 are hidden`;
 
 describe('components/announcement_bar/PostHistoryLimitBanner', () => {
     let mockOpenPricingModal: jest.Mock;
@@ -54,8 +54,6 @@ describe('components/announcement_bar/PostHistoryLimitBanner', () => {
     let mockToLocaleDateString: jest.SpyInstance;
 
     beforeEach(() => {
-        jest.clearAllMocks();
-
         mockOpenPricingModal = jest.fn();
         mockUseOpenPricingModal.mockReturnValue({openPricingModal: mockOpenPricingModal});
 
@@ -129,7 +127,7 @@ describe('components/announcement_bar/PostHistoryLimitBanner', () => {
             renderWithContext(<PostHistoryLimitBanner/>, state);
 
             expect(screen.getByText(bannerText)).toBeInTheDocument();
-            expect(screen.getByText('Upgrade')).toBeInTheDocument();
+            expect(screen.getByText('Restore Access')).toBeInTheDocument();
         });
 
         it('should not show banner when limits are not loaded', () => {
@@ -259,19 +257,19 @@ describe('components/announcement_bar/PostHistoryLimitBanner', () => {
     describe('User Interactions', () => {
         const preferenceName = 'post_history_limit_banner';
 
-        it('should call openPricingModal when upgrade button is clicked', () => {
+        it('should call openPricingModal when upgrade button is clicked', async () => {
             setupServerLimits(true);
             const state = createInitialState(true, []);
 
             renderWithContext(<PostHistoryLimitBanner/>, state);
 
-            const upgradeButton = screen.getByText('Upgrade');
-            fireEvent.click(upgradeButton);
+            const upgradeButton = screen.getByText('Restore Access');
+            await userEvent.click(upgradeButton);
 
             expect(mockOpenPricingModal).toHaveBeenCalled();
         });
 
-        it('should save dismissal timestamp when close button is clicked', () => {
+        it('should save dismissal timestamp when close button is clicked', async () => {
             setupServerLimits(true);
             const state = createInitialState(true, []);
 
@@ -281,7 +279,7 @@ describe('components/announcement_bar/PostHistoryLimitBanner', () => {
             renderWithContext(<PostHistoryLimitBanner/>, state);
 
             const closeButton = screen.getByRole('link', {name: '×'});
-            fireEvent.click(closeButton);
+            await userEvent.click(closeButton);
 
             expect(mockDispatch).toHaveBeenCalledWith(
                 mockSavePreferences(currentUserId, [{

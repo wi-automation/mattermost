@@ -6,6 +6,7 @@ package slackimport
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -759,4 +760,283 @@ func TestSlackImportEnhancedSecurityBackwardsCompatibility(t *testing.T) {
 
 	// Verify VerifyEmail was NOT called
 	userStore.AssertNotCalled(t, "VerifyEmail")
+}
+
+type slackAddUsersTestSetup struct {
+	store     *mocks.Store
+	teamStore *mocks.TeamStore
+	userStore *mocks.UserStore
+	team      *model.Team
+	savedUser *model.User
+}
+
+func newSlackAddUsersTestSetup(t *testing.T) *slackAddUsersTestSetup {
+	t.Helper()
+
+	s := &slackAddUsersTestSetup{}
+	s.store = &mocks.Store{}
+	s.teamStore = &mocks.TeamStore{}
+	s.userStore = &mocks.UserStore{}
+	s.store.On("Team").Return(s.teamStore)
+	s.store.On("User").Return(s.userStore)
+
+	s.team = &model.Team{Id: "test-team-id", Name: "test-team"}
+	s.teamStore.On("Get", "test-team-id").Return(s.team, nil)
+	s.userStore.On("GetByEmail", mock.AnythingOfType("string")).Return(nil, fmt.Errorf("not found"))
+
+	s.savedUser = &model.User{Id: "test-user-id", Username: "testuser", Email: "testuser@example.com"}
+	s.userStore.On("Save", mock.AnythingOfType("*request.Context"), mock.AnythingOfType("*model.User")).Return(s.savedUser, nil)
+
+	return s
+}
+
+func (s *slackAddUsersTestSetup) newImporter(actions Actions) *SlackImporter {
+	config := &model.Config{}
+	config.SetDefaults()
+	return New(s.store, actions, config)
+}
+
+func (s *slackAddUsersTestSetup) newImporterWithAdminFlag(actions Actions, isAdminImport bool) *SlackImporter {
+	config := &model.Config{}
+	config.SetDefaults()
+	return NewWithAdminFlag(s.store, actions, config, isAdminImport)
+}
+
+func (s *slackAddUsersTestSetup) defaultActions() Actions {
+	return Actions{
+		JoinUserToTeam: func(team *model.Team, user *model.User, userRequestorId string) (*model.TeamMember, *model.AppError) {
+			return &model.TeamMember{}, nil
+		},
+		SendPasswordReset: func(email string) (bool, *model.AppError) {
+			return true, nil
+		},
+	}
+}
+
+func defaultSlackUsers() []slackUser {
+	return []slackUser{
+		{Id: "U001", Username: "testuser", Profile: slackProfile{FirstName: "Test", LastName: "User", Email: "testuser@example.com"}},
+	}
+}
+
+func TestSlackAddUsersLogContainsProperUserCreationMessage(t *testing.T) {
+	rctx := request.TestContext(t)
+	s := newSlackAddUsersTestSetup(t)
+
+	importer := s.newImporter(s.defaultActions())
+	importerLog := new(bytes.Buffer)
+	importer.slackAddUsers(rctx, "test-team-id", defaultSlackUsers(), importerLog)
+
+	logOutput := importerLog.String()
+	assert.Contains(t, logOutput, "api.slackimport.slack_add_users.email", "import log should contain the user creation message")
+	assert.NotContains(t, logOutput, "api.slackimport.slack_add_users.email_pwd", "import log must not use the old user creation message")
+}
+
+func TestSlackAddUsersLogsSendResetEmailFailure(t *testing.T) {
+	rctx := request.TestContext(t)
+	s := newSlackAddUsersTestSetup(t)
+
+	actions := s.defaultActions()
+	actions.SendPasswordReset = func(email string) (bool, *model.AppError) {
+		return false, nil
+	}
+
+	importer := s.newImporter(actions)
+	importerLog := new(bytes.Buffer)
+	importer.slackAddUsers(rctx, "test-team-id", defaultSlackUsers(), importerLog)
+
+	assert.Contains(t, importerLog.String(), "api.slackimport.slack_add_users.send_reset_email_failed")
+}
+
+func TestSlackAddUsersGeneratesUserWithEmptyPassword(t *testing.T) {
+	rctx := request.TestContext(t)
+	s := newSlackAddUsersTestSetup(t)
+
+	importer := s.newImporter(s.defaultActions())
+	importerLog := new(bytes.Buffer)
+	importer.slackAddUsers(rctx, "test-team-id", defaultSlackUsers(), importerLog)
+
+	s.userStore.AssertCalled(t, "Save", mock.AnythingOfType("*request.Context"), mock.MatchedBy(func(u *model.User) bool {
+		return u.Password == ""
+	}))
+}
+
+func TestSlackAddUsersTriggersPasswordResetFlow(t *testing.T) {
+	rctx := request.TestContext(t)
+	s := newSlackAddUsersTestSetup(t)
+
+	passwordResetCalled := false
+	actions := s.defaultActions()
+	actions.SendPasswordReset = func(email string) (bool, *model.AppError) {
+		passwordResetCalled = true
+		return true, nil
+	}
+
+	importer := s.newImporter(actions)
+	importerLog := new(bytes.Buffer)
+	importer.slackAddUsers(rctx, "test-team-id", defaultSlackUsers(), importerLog)
+
+	assert.True(t, passwordResetCalled, "SendPasswordReset should be called for each imported user")
+}
+
+// TestSlackAddUsersNonAdminImportDoesNotMergeExistingUser tests that a non-admin import skips
+// a Slack user whose email matches an existing Mattermost account that is not already on the
+// team, rather than force-enrolling that account into the team.
+func TestSlackAddUsersNonAdminImportDoesNotMergeExistingUser(t *testing.T) {
+	rctx := request.TestContext(t)
+
+	store := &mocks.Store{}
+	teamStore := &mocks.TeamStore{}
+	userStore := &mocks.UserStore{}
+	store.On("Team").Return(teamStore)
+	store.On("User").Return(userStore)
+
+	team := &model.Team{Id: "test-team-id", Name: "test-team"}
+	teamStore.On("Get", "test-team-id").Return(team, nil)
+
+	existingUser := &model.User{Id: "existing-user-id", Username: "existinguser", Email: "shared@example.com"}
+	userStore.On("GetByEmail", "shared@example.com").Return(existingUser, nil)
+
+	var joinedUserIDs []string
+	actions := Actions{
+		JoinUserToTeam: func(team *model.Team, user *model.User, userRequestorId string) (*model.TeamMember, *model.AppError) {
+			joinedUserIDs = append(joinedUserIDs, user.Id)
+			return &model.TeamMember{}, nil
+		},
+		SendPasswordReset: func(email string) (bool, *model.AppError) {
+			return true, nil
+		},
+	}
+
+	config := &model.Config{}
+	config.SetDefaults()
+	importer := NewWithAdminFlag(store, actions, config, false)
+
+	slackUsers := []slackUser{
+		{Id: "U001", Username: "slackuser", Profile: slackProfile{FirstName: "Slack", LastName: "User", Email: "shared@example.com"}},
+	}
+
+	importerLog := new(bytes.Buffer)
+	addedUsers := importer.slackAddUsers(rctx, "test-team-id", slackUsers, importerLog)
+
+	assert.NotContains(t, addedUsers, "U001", "user should be skipped entirely on email conflict")
+	assert.Empty(t, joinedUserIDs, "no account should be joined to the team")
+	userStore.AssertNotCalled(t, "Save", mock.Anything, mock.Anything)
+	assert.Contains(t, importerLog.String(), "api.slackimport.slack_add_users.merge_existing_skipped_non_admin")
+	assert.NotContains(t, importerLog.String(), "api.slackimport.slack_add_users.email")
+	assert.NotContains(t, importerLog.String(), "api.slackimport.slack_add_users.unable_import")
+}
+
+// TestSlackAddUsersNonAdminImportSkipsExistingTeamMember tests that a non-admin import skips
+// a Slack user whose email matches an existing Mattermost account even when that account is
+// already a team member, preventing post authorship forgery.
+func TestSlackAddUsersNonAdminImportSkipsExistingTeamMember(t *testing.T) {
+	rctx := request.TestContext(t)
+
+	store := &mocks.Store{}
+	teamStore := &mocks.TeamStore{}
+	userStore := &mocks.UserStore{}
+	store.On("Team").Return(teamStore)
+	store.On("User").Return(userStore)
+
+	team := &model.Team{Id: "test-team-id", Name: "test-team"}
+	teamStore.On("Get", "test-team-id").Return(team, nil)
+
+	existingUser := &model.User{Id: "existing-user-id", Username: "existinguser", Email: "shared@example.com"}
+	userStore.On("GetByEmail", "shared@example.com").Return(existingUser, nil)
+
+	var joinedUserIDs []string
+	actions := Actions{
+		JoinUserToTeam: func(team *model.Team, user *model.User, userRequestorId string) (*model.TeamMember, *model.AppError) {
+			joinedUserIDs = append(joinedUserIDs, user.Id)
+			return &model.TeamMember{}, nil
+		},
+		SendPasswordReset: func(email string) (bool, *model.AppError) {
+			return true, nil
+		},
+	}
+
+	config := &model.Config{}
+	config.SetDefaults()
+	importer := NewWithAdminFlag(store, actions, config, false)
+
+	slackUsers := []slackUser{
+		{Id: "U001", Username: "slackuser", Profile: slackProfile{FirstName: "Slack", LastName: "User", Email: "shared@example.com"}},
+	}
+
+	importerLog := new(bytes.Buffer)
+	addedUsers := importer.slackAddUsers(rctx, "test-team-id", slackUsers, importerLog)
+
+	assert.NotContains(t, addedUsers, "U001", "existing account should be skipped even when already on the team")
+	assert.Empty(t, joinedUserIDs, "no account should be joined to the team")
+	userStore.AssertNotCalled(t, "Save", mock.Anything, mock.Anything)
+	assert.Contains(t, importerLog.String(), "api.slackimport.slack_add_users.merge_existing_skipped_non_admin")
+}
+
+// TestSlackAddUsersAdminImportMergesExistingUser tests that an admin import preserves the
+// existing behavior of adopting an existing Mattermost account that shares an email with a
+// Slack user.
+func TestSlackAddUsersAdminImportMergesExistingUser(t *testing.T) {
+	rctx := request.TestContext(t)
+
+	store := &mocks.Store{}
+	teamStore := &mocks.TeamStore{}
+	userStore := &mocks.UserStore{}
+	store.On("Team").Return(teamStore)
+	store.On("User").Return(userStore)
+
+	team := &model.Team{Id: "test-team-id", Name: "test-team"}
+	teamStore.On("Get", "test-team-id").Return(team, nil)
+
+	existingUser := &model.User{Id: "existing-user-id", Username: "existinguser", Email: "shared@example.com"}
+	userStore.On("GetByEmail", "shared@example.com").Return(existingUser, nil)
+
+	var joinedUserIDs []string
+	actions := Actions{
+		JoinUserToTeam: func(team *model.Team, user *model.User, userRequestorId string) (*model.TeamMember, *model.AppError) {
+			joinedUserIDs = append(joinedUserIDs, user.Id)
+			return &model.TeamMember{}, nil
+		},
+		SendPasswordReset: func(email string) (bool, *model.AppError) {
+			return true, nil
+		},
+	}
+
+	config := &model.Config{}
+	config.SetDefaults()
+	importer := NewWithAdminFlag(store, actions, config, true)
+
+	slackUsers := []slackUser{
+		{Id: "U001", Username: "slackuser", Profile: slackProfile{FirstName: "Slack", LastName: "User", Email: "shared@example.com"}},
+	}
+
+	importerLog := new(bytes.Buffer)
+	addedUsers := importer.slackAddUsers(rctx, "test-team-id", slackUsers, importerLog)
+
+	require.Contains(t, addedUsers, "U001")
+	assert.Equal(t, "existing-user-id", addedUsers["U001"].Id, "admin import should still adopt the existing account")
+	assert.Contains(t, joinedUserIDs, "existing-user-id")
+
+	userStore.AssertNotCalled(t, "Save", mock.Anything, mock.Anything)
+
+	expectedLog := "api.slackimport.slack_add_users.created" +
+		"===============\r\n\r\n" +
+		"api.slackimport.slack_add_users.merge_existing"
+	assert.Equal(t, expectedLog, importerLog.String())
+}
+
+// TestSlackAddUsersCreatesNewAccountWhenNoExistingMatch tests that when no existing account
+// matches the Slack user's email, a new account is created and joined to the team, regardless
+// of whether the import is an admin import.
+func TestSlackAddUsersCreatesNewAccountWhenNoExistingMatch(t *testing.T) {
+	rctx := request.TestContext(t)
+	s := newSlackAddUsersTestSetup(t)
+
+	importer := s.newImporterWithAdminFlag(s.defaultActions(), false)
+	importerLog := new(bytes.Buffer)
+	addedUsers := importer.slackAddUsers(rctx, "test-team-id", defaultSlackUsers(), importerLog)
+
+	require.Contains(t, addedUsers, "U001")
+	assert.Equal(t, s.savedUser.Id, addedUsers["U001"].Id)
+	assert.Contains(t, importerLog.String(), "api.slackimport.slack_add_users.email")
 }

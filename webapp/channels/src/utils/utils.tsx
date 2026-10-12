@@ -9,6 +9,7 @@ import isNil from 'lodash/isNil';
 import moment from 'moment';
 import React from 'react';
 import type {LinkHTMLAttributes} from 'react';
+import type {MessageDescriptor} from 'react-intl';
 
 import type {Channel} from '@mattermost/types/channels';
 import type {Address} from '@mattermost/types/cloud';
@@ -47,7 +48,6 @@ import {displayUsername} from 'mattermost-redux/utils/user_utils';
 
 import {searchForTerm} from 'actions/post_actions';
 import {addUserToTeam} from 'actions/team_actions';
-import {getCurrentLocale, getTranslations} from 'selectors/i18n';
 import store from 'stores/redux_store';
 
 import {focusPost} from 'components/permalink_view/actions';
@@ -56,7 +56,10 @@ import type {TextboxElement} from 'components/textbox';
 import {getHistory} from 'utils/browser_history';
 import Constants, {FileTypes, ValidationErrors, A11yCustomEventTypes, AdvancedTextEditorTextboxIds} from 'utils/constants';
 import type {A11yFocusEventDetail} from 'utils/constants';
+import DesktopApp from 'utils/desktop_api';
+import {getIntl} from 'utils/i18n';
 import * as Keyboard from 'utils/keyboard';
+import {FOCUS_REPLY_POST, isPopoutWindow, sendToParent} from 'utils/popouts/popout_windows';
 import * as UserAgent from 'utils/user_agent';
 
 import {joinPrivateChannelPrompt} from './channel_utils';
@@ -353,6 +356,8 @@ export function toRgbValues(hexStr: string): string {
 }
 
 export function applyTheme(theme: Theme) {
+    DesktopApp.updateTheme({...theme, isUsingSystemTheme: false});
+
     if (theme.centerChannelColor) {
         changeCss('.app__body .markdown__table tbody tr:nth-child(2n)', 'background:' + changeOpacity(theme.centerChannelColor, 0.07));
         changeCss('.app__body .channel-header__info .header-dropdown__icon', 'color:' + changeOpacity(theme.centerChannelColor, 0.75));
@@ -1229,35 +1234,34 @@ export function clearFileInput(elm: HTMLInputElement) {
 }
 
 /**
- * @deprecated Use react-intl instead, only place its usage can be justified is in the redux actions
+ * @deprecated Prefer using react-intl's `useIntl` hook or `FormattedMessage` component within React components.
+ * This function is mainly for use in Redux actions, utilities, and other non-React contexts.
+ *
+ * @param descriptor - Message descriptor with id, defaultMessage, and optional description
+ * @param values - Optional values for placeholder interpolation
+ * @returns The localized string with interpolated values
+ *
+ * @example
+ * // Simple message
+ * localizeMessage({
+ *   id: 'example.message',
+ *   defaultMessage: 'This is an example message',
+ *   description: 'An example message shown in the help section'
+ * })
+ *
+ * @example
+ * // Message with interpolation
+ * localizeMessage({
+ *   id: 'welcome.message',
+ *   defaultMessage: 'Welcome, {username}!',
+ *   description: 'Welcome message with username'
+ * }, {username: 'John'})
  */
-export function localizeMessage({id, defaultMessage}: {id: string; defaultMessage?: string}) {
-    const state = store.getState();
-
-    const locale = getCurrentLocale(state);
-    const translations = getTranslations(state, locale);
-
-    if (!translations || !(id in translations)) {
-        return defaultMessage || id;
-    }
-
-    return translations[id];
-}
-
-/**
- * @deprecated If possible, use intl.formatMessage instead. If you have to use this, remember to mark the id using `t`
- */
-export function localizeAndFormatMessage(descriptor: {id: string; defaultMessage?: string}, template: { [name: string]: any } | undefined) {
-    const base = localizeMessage(descriptor);
-
-    if (!template) {
-        return base;
-    }
-
-    return base.replace(/{[\w]+}/g, (match) => {
-        const key = match.substr(1, match.length - 2);
-        return template[key] || match;
-    });
+export function localizeMessage(descriptor: MessageDescriptor, values?: Record<string, any>): string;
+export function localizeMessage(descriptor: {id: string; defaultMessage?: string; description?: string}, values?: Record<string, any>): string;
+export function localizeMessage(descriptor: MessageDescriptor | {id: string; defaultMessage?: string; description?: string}, values?: Record<string, any>): string {
+    const intl = getIntl();
+    return intl.formatMessage(descriptor as MessageDescriptor, values);
 }
 
 export function mod(a: number, b: number): number {
@@ -1286,7 +1290,7 @@ function isChannelOrPermalink(link: string) {
     return match;
 }
 
-export async function handleFormattedTextClick(e: React.MouseEvent, currentRelativeTeamUrl = '') {
+export async function handleFormattedTextClick(e: React.UIEvent, currentRelativeTeamUrl = '') {
     const hashtagAttribute = (e.target as any).getAttributeNode('data-hashtag');
     const linkAttribute = (e.target as any).getAttributeNode('data-link');
     const channelMentionAttribute = (e.target as any).getAttributeNode('data-channel-mention');
@@ -1298,7 +1302,7 @@ export async function handleFormattedTextClick(e: React.MouseEvent, currentRelat
     } else if (linkAttribute) {
         const MIDDLE_MOUSE_BUTTON = 1;
 
-        if (!(e.button === MIDDLE_MOUSE_BUTTON || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey)) {
+        if (!isMouseEvent(e) || !(e.button === MIDDLE_MOUSE_BUTTON || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey)) {
             e.preventDefault();
 
             const state = store.getState();
@@ -1374,15 +1378,28 @@ export async function handleFormattedTextClick(e: React.MouseEvent, currentRelat
             e.stopPropagation();
 
             if (match && match.type === 'permalink' && isTeamSameWithCurrentTeam(state, match.teamName) && isReply && crtEnabled) {
-                store.dispatch(focusPost(match.postId ?? '', linkAttribute.value, user.id, {skipRedirectReplyPermalink: true}));
+                if (isPopoutWindow()) {
+                    sendToParent(FOCUS_REPLY_POST, match.postId ?? '', linkAttribute.value);
+                } else {
+                    store.dispatch(focusPost(match.postId ?? '', linkAttribute.value, user.id, {skipRedirectReplyPermalink: true}));
+                }
             } else {
                 getHistory().push(linkAttribute.value);
             }
         }
     } else if (channelMentionAttribute) {
         e.preventDefault();
-        getHistory().push(currentRelativeTeamUrl + '/channels/' + channelMentionAttribute.value);
+
+        // Check if the link specifies a team (for cross-team channel mentions)
+        const teamAttribute = (e.target as any).getAttributeNode('data-channel-mention-team');
+        const teamUrl = teamAttribute ? '/' + teamAttribute.value : currentRelativeTeamUrl;
+
+        getHistory().push(teamUrl + '/channels/' + channelMentionAttribute.value);
     }
+}
+
+function isMouseEvent(e: React.UIEvent): e is React.MouseEvent {
+    return 'button' in e;
 }
 
 export function isEmptyObject(object: any) {

@@ -14,6 +14,10 @@ import (
 const (
 	PropertyValueTargetIDMaxRunes   = 255
 	PropertyValueTargetTypeMaxRunes = 255
+
+	PropertyValueTargetTypePost    = "post"
+	PropertyValueTargetTypeUser    = "user"
+	PropertyValueTargetTypeChannel = "channel"
 )
 
 type PropertyValue struct {
@@ -26,6 +30,8 @@ type PropertyValue struct {
 	CreateAt   int64           `json:"create_at"`
 	UpdateAt   int64           `json:"update_at"`
 	DeleteAt   int64           `json:"delete_at"`
+	CreatedBy  string          `json:"created_by"`
+	UpdatedBy  string          `json:"updated_by"`
 }
 
 func (pv *PropertyValue) PreSave() {
@@ -108,7 +114,24 @@ type PropertyValueSearchOpts struct {
 	TargetType     string
 	TargetIDs      []string
 	FieldID        string
+	SinceUpdateAt  int64 // UpdateAt after which to send the items
 	IncludeDeleted bool
 	Cursor         PropertyValueSearchCursor
 	PerPage        int
+	Value          json.RawMessage
+}
+
+// PropertyValueSearch captures the parameters provided by a client for
+// searching property values
+type PropertyValueSearch struct {
+	CursorID       string `json:"cursor_id,omitempty"`
+	CursorCreateAt int64  `json:"cursor_create_at,omitempty"`
+	PerPage        int    `json:"per_page"`
+}
+
+// PropertyValuePatchItem represents a single field value update in a
+// batch PATCH request for property values.
+type PropertyValuePatchItem struct {
+	FieldID string          `json:"field_id"`
+	Value   json.RawMessage `json:"value"`
 }

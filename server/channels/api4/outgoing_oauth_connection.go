@@ -36,12 +36,12 @@ func (api *API) InitOutgoingOAuthConnection() {
 // other users can use them in their outgoing webhooks and slash commands if they have permissions to manage those.
 func checkOutgoingOAuthConnectionReadPermissions(c *Context, teamId string) bool {
 	if c.App.SessionHasPermissionTo(*c.AppContext.Session(), model.PermissionManageOutgoingOAuthConnections) ||
-		c.App.SessionHasPermissionToTeam(*c.AppContext.Session(), teamId, model.PermissionManageOutgoingWebhooks) ||
-		c.App.SessionHasPermissionToTeam(*c.AppContext.Session(), teamId, model.PermissionManageSlashCommands) {
+		c.App.SessionHasPermissionToTeam(*c.AppContext.Session(), teamId, model.PermissionManageOwnOutgoingWebhooks) ||
+		c.App.SessionHasPermissionToTeam(*c.AppContext.Session(), teamId, model.PermissionManageOwnSlashCommands) {
 		return true
 	}
 
-	c.SetPermissionError(model.PermissionManageOutgoingWebhooks, model.PermissionManageSlashCommands)
+	c.SetPermissionError(model.PermissionManageOwnOutgoingWebhooks, model.PermissionManageOwnSlashCommands)
 	return false
 }
 
@@ -376,19 +376,6 @@ func validateOutgoingOAuthConnectionCredentials(c *Context, w http.ResponseWrite
 		c.Err = model.NewAppError(whereOutgoingOAuthConnection, "api.context.outgoing_oauth_connection.validate_connection_credentials.input_error", nil, "", http.StatusBadRequest).Wrap(err)
 		w.WriteHeader(c.Err.StatusCode)
 		return
-	}
-
-	if inputConnection.Id != "" && inputConnection.ClientSecret == "" {
-		var err *model.AppError
-		var storedConnection *model.OutgoingOAuthConnection
-		storedConnection, err = service.GetConnection(c.AppContext, inputConnection.Id)
-		if err != nil {
-			c.Err = model.NewAppError(whereOutgoingOAuthConnection, "api.context.outgoing_oauth_connection.validate_connection_credentials.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
-			w.WriteHeader(c.Err.StatusCode)
-			return
-		}
-
-		inputConnection.ClientSecret = storedConnection.ClientSecret
 	}
 
 	model.AddEventParameterAuditableToAuditRec(auditRec, "outgoing_oauth_connection", inputConnection)

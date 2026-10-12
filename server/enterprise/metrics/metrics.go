@@ -44,6 +44,7 @@ const (
 	MetricsSubsystemClientsWeb         = "webapp"
 	MetricsSubsystemClientsDesktopApp  = "desktopapp"
 	MetricsSubsystemAccessControl      = "access_control"
+	MetricsSubsystemAutoTranslation    = "autotranslation"
 	MetricsCloudInstallationLabel      = "installationId"
 	MetricsCloudDatabaseClusterLabel   = "databaseClusterName"
 	MetricsCloudInstallationGroupLabel = "installationGroupId"
@@ -73,8 +74,9 @@ type MetricsInterfaceImpl struct {
 	HTTPErrorsCounter   prometheus.Counter
 	HTTPWebsocketsGauge *prometheus.GaugeVec
 
-	ClusterRequestsDuration prometheus.Histogram
-	ClusterRequestsCounter  prometheus.Counter
+	ClusterRequestsDuration       prometheus.Histogram
+	ClusterRequestsCounter        prometheus.Counter
+	ClusterReliableFallbackLength *prometheus.HistogramVec
 
 	ClusterHealthGauge prometheus.GaugeFunc
 
@@ -146,12 +148,14 @@ type MetricsInterfaceImpl struct {
 	WebsocketBroadcastDraftCreated                prometheus.Counter
 	WebsocketBroadcastDraftUpdated                prometheus.Counter
 	WebsocketBroadcastDraftDeleted                prometheus.Counter
+	WebsocketBroadcastPostTranslationUpdated      prometheus.Counter
 
 	WebSocketBroadcastOther                      prometheus.Counter
 	WebSocketBroadcastBufferGauge                *prometheus.GaugeVec
 	WebSocketBroadcastBufferUsersRegisteredGauge *prometheus.GaugeVec
 	WebSocketReconnectCounter                    *prometheus.CounterVec
 
+	SearchEngineStatusGauge    prometheus.GaugeFunc
 	SearchPostSearchesCounter  prometheus.Counter
 	SearchPostSearchesDuration prometheus.Histogram
 	SearchFileSearchesCounter  prometheus.Counter
@@ -234,10 +238,21 @@ type MetricsInterfaceImpl struct {
 	DesktopClientCPUUsage    *prometheus.HistogramVec
 	DesktopClientMemoryUsage *prometheus.HistogramVec
 
+	PluginWebappPerf *prometheus.HistogramVec
+
 	AccessControlExpressionCompileDuration prometheus.Histogram
 	AccessControlEvaluateDuration          prometheus.Histogram
 	AccessControlSearchQueryDuration       prometheus.Histogram
 	AccessControlCacheInvalidation         prometheus.Counter
+
+	// Auto-translation metrics
+	AutoTranslateTranslateDuration       *prometheus.HistogramVec
+	AutoTranslateLinguaDetectionDuration prometheus.Histogram
+	AutoTranslateProviderCallDuration    *prometheus.HistogramVec
+	AutoTranslateQueueDepth              prometheus.Gauge
+	AutoTranslateWorkerTaskDuration      prometheus.Histogram
+	AutoTranslateRecoveryStuckFound      prometheus.Counter
+	AutoTranslateNormHashCounter         *prometheus.CounterVec
 }
 
 func init() {
@@ -521,6 +536,7 @@ func New(ps *platform.PlatformService, driver, dataSource string) *MetricsInterf
 		model.ClusterEventInvalidateCacheForLastPostTime,
 		model.ClusterEventInvalidateCacheForPostsUsage,
 		model.ClusterEventInvalidateCacheForTeams,
+		model.ClusterEventInvalidateCacheForContentFlagging,
 		model.ClusterEventClearSessionCacheForAllUsers,
 		model.ClusterEventInstallPlugin,
 		model.ClusterEventRemovePlugin,
@@ -531,6 +547,23 @@ func New(ps *platform.PlatformService, driver, dataSource string) *MetricsInterf
 		m.ClusterEventMap[event] = m.ClusterEventTypeCounters.With(prometheus.Labels{"name": string(event)})
 	}
 	m.ClusterEventMap[model.ClusterEvent("other")] = m.ClusterEventTypeCounters.With(prometheus.Labels{"name": "other"})
+
+	m.ClusterReliableFallbackLength = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace:   MetricsNamespace,
+			Subsystem:   MetricsSubsystemCluster,
+			Name:        "reliable_fallback_tcp",
+			Help:        "The total length in bytes of the SendBestEffort calls (UDP) that had to fallback to SendReliable (TCP) because of the message length.",
+			ConstLabels: additionalLabels,
+			// The data here will start at maxUDPDataLen = (1<<16 - 1) - 8 - 20 - 35 = 65472,
+			// so we start the first bucket at 32KiB, which will always be zero, and add 8
+			// steps exponentially until 4MiB:
+			// 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304
+			Buckets: prometheus.ExponentialBuckets(32768, 2, 8),
+		},
+		[]string{"event"},
+	)
+	m.Registry.MustRegister(m.ClusterReliableFallbackLength)
 
 	// Login Subsystem
 
@@ -678,6 +711,7 @@ func New(ps *platform.PlatformService, driver, dataSource string) *MetricsInterf
 	m.WebsocketBroadcastDraftCreated = m.WebSocketBroadcastCounters.With(prometheus.Labels{"name": string(model.WebsocketEventDraftCreated)})
 	m.WebsocketBroadcastDraftUpdated = m.WebSocketBroadcastCounters.With(prometheus.Labels{"name": string(model.WebsocketEventDraftUpdated)})
 	m.WebsocketBroadcastDraftDeleted = m.WebSocketBroadcastCounters.With(prometheus.Labels{"name": string(model.WebsocketEventDraftDeleted)})
+	m.WebsocketBroadcastPostTranslationUpdated = m.WebSocketBroadcastCounters.With(prometheus.Labels{"name": string(model.WebsocketEventPostTranslationUpdated)})
 	m.WebSocketBroadcastOther = m.WebSocketBroadcastCounters.With(prometheus.Labels{"name": "other"})
 
 	m.WebsocketEventCounters = prometheus.NewCounterVec(
@@ -729,6 +763,24 @@ func New(ps *platform.PlatformService, driver, dataSource string) *MetricsInterf
 	m.Registry.MustRegister(m.WebSocketReconnectCounter)
 
 	// Search Subsystem
+
+	m.SearchEngineStatusGauge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace:   MetricsNamespace,
+		Subsystem:   MetricsSubsystemSearch,
+		Name:        "engine_status",
+		Help:        "Status of the configured search engine: 1 = healthy or not configured, 0 = configured but unavailable.",
+		ConstLabels: additionalLabels,
+	}, func() float64 {
+		es := m.Platform.SearchEngine.ElasticsearchEngine
+		if es == nil || !es.IsEnabled() {
+			return 1 // no search engine expected; nothing to alert on
+		}
+		if es.IsHealthy() {
+			return 1
+		}
+		return 0
+	})
+	m.Registry.MustRegister(m.SearchEngineStatusGauge)
 
 	m.SearchPostSearchesCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace:   MetricsNamespace,
@@ -1358,6 +1410,18 @@ func New(ps *platform.PlatformService, driver, dataSource string) *MetricsInterf
 	)
 	m.Registry.MustRegister(m.ClientGlobalThreadsLoadDuration)
 
+	// Plugin webapp performance metrics
+	m.PluginWebappPerf = prometheus.NewHistogramVec(
+		withLabels(prometheus.HistogramOpts{
+			Namespace: MetricsNamespace,
+			Subsystem: MetricsSubsystemPlugin,
+			Name:      "webapp_perf",
+			Help:      "Plugin webapp performance measurements",
+		}),
+		[]string{"platform", "agent", "plugin_id", "plugin_metric_label"},
+	)
+	m.Registry.MustRegister(m.PluginWebappPerf)
+
 	m.MobileClientLoadDuration = prometheus.NewHistogramVec(
 		withLabels(prometheus.HistogramOpts{
 			Namespace: MetricsNamespace,
@@ -1576,6 +1640,79 @@ func New(ps *platform.PlatformService, driver, dataSource string) *MetricsInterf
 		})
 	m.Registry.MustRegister(m.AccessControlCacheInvalidation)
 
+	// Auto-translation Subsystem
+	m.AutoTranslateTranslateDuration = prometheus.NewHistogramVec(
+		withLabels(prometheus.HistogramOpts{
+			Namespace: MetricsNamespace,
+			Subsystem: MetricsSubsystemAutoTranslation,
+			Name:      "translate_duration_seconds",
+			Help:      "Duration of the Translate() function (latency impact on post create/edit)",
+			Buckets:   []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0},
+		}),
+		[]string{"object_type"},
+	)
+	m.Registry.MustRegister(m.AutoTranslateTranslateDuration)
+
+	m.AutoTranslateLinguaDetectionDuration = prometheus.NewHistogram(withLabels(prometheus.HistogramOpts{
+		Namespace: MetricsNamespace,
+		Subsystem: MetricsSubsystemAutoTranslation,
+		Name:      "lingua_detection_duration_seconds",
+		Help:      "Duration of lingua-go language detection",
+		Buckets:   []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0},
+	}))
+	m.Registry.MustRegister(m.AutoTranslateLinguaDetectionDuration)
+
+	m.AutoTranslateProviderCallDuration = prometheus.NewHistogramVec(
+		withLabels(prometheus.HistogramOpts{
+			Namespace: MetricsNamespace,
+			Subsystem: MetricsSubsystemAutoTranslation,
+			Name:      "provider_call_duration_seconds",
+			Help:      "Duration of translation provider API calls",
+			Buckets:   []float64{0.1, 0.25, 0.5, 1, 2, 4, 8, 15, 30, 60},
+		}),
+		[]string{"provider", "result"},
+	)
+	m.Registry.MustRegister(m.AutoTranslateProviderCallDuration)
+
+	m.AutoTranslateQueueDepth = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace:   MetricsNamespace,
+		Subsystem:   MetricsSubsystemAutoTranslation,
+		Name:        "queue_depth_total",
+		Help:        "Current number of translation tasks waiting in worker queue",
+		ConstLabels: additionalLabels,
+	})
+	m.Registry.MustRegister(m.AutoTranslateQueueDepth)
+
+	m.AutoTranslateWorkerTaskDuration = prometheus.NewHistogram(withLabels(prometheus.HistogramOpts{
+		Namespace: MetricsNamespace,
+		Subsystem: MetricsSubsystemAutoTranslation,
+		Name:      "worker_task_duration_seconds",
+		Help:      "Duration for workers to process individual translation tasks",
+		Buckets:   []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60},
+	}))
+	m.Registry.MustRegister(m.AutoTranslateWorkerTaskDuration)
+
+	m.AutoTranslateRecoveryStuckFound = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace:   MetricsNamespace,
+		Subsystem:   MetricsSubsystemAutoTranslation,
+		Name:        "recovery_stuck_found_total",
+		Help:        "Total number of stuck translations found by recovery sweep",
+		ConstLabels: additionalLabels,
+	})
+	m.Registry.MustRegister(m.AutoTranslateRecoveryStuckFound)
+
+	m.AutoTranslateNormHashCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace:   MetricsNamespace,
+			Subsystem:   MetricsSubsystemAutoTranslation,
+			Name:        "normhash_total",
+			Help:        "Translation reuse via normhash (hit=reused, miss=retranslated)",
+			ConstLabels: additionalLabels,
+		},
+		[]string{"result"},
+	)
+	m.Registry.MustRegister(m.AutoTranslateNormHashCounter)
+
 	return m
 }
 
@@ -1720,6 +1857,8 @@ func (mi *MetricsInterfaceImpl) IncrementWebSocketBroadcast(eventType model.Webs
 		mi.WebsocketBroadcastDraftUpdated.Inc()
 	case model.WebsocketEventDraftDeleted:
 		mi.WebsocketBroadcastDraftDeleted.Inc()
+	case model.WebsocketEventPostTranslationUpdated:
+		mi.WebsocketBroadcastPostTranslationUpdated.Inc()
 	default:
 		mi.WebSocketBroadcastOther.Inc()
 	}
@@ -1739,6 +1878,10 @@ func (mi *MetricsInterfaceImpl) IncrementHTTPError() {
 
 func (mi *MetricsInterfaceImpl) IncrementClusterRequest() {
 	mi.ClusterRequestsCounter.Inc()
+}
+
+func (mi *MetricsInterfaceImpl) ObserveClusterReliableFallbackLength(event model.ClusterEvent, length int) {
+	mi.ClusterReliableFallbackLength.With(prometheus.Labels{"event": string(event)}).Observe(float64(length))
 }
 
 func (mi *MetricsInterfaceImpl) ObserveClusterRequestDuration(elapsed float64) {
@@ -2118,6 +2261,15 @@ func (mi *MetricsInterfaceImpl) ObserveGlobalThreadsLoadDuration(platform, agent
 	mi.ClientGlobalThreadsLoadDuration.With(prometheus.Labels{"platform": platform, "agent": agent, "user_id": effectiveUserID}).Observe(elapsed)
 }
 
+func (mi *MetricsInterfaceImpl) ObservePluginWebappPerf(platform, agent, pluginID, pluginMetricLabel string, elapsed float64) {
+	mi.PluginWebappPerf.With(prometheus.Labels{
+		"platform":            platform,
+		"agent":               agent,
+		"plugin_id":           pluginID,
+		"plugin_metric_label": pluginMetricLabel,
+	}).Observe(elapsed)
+}
+
 func (mi *MetricsInterfaceImpl) ObserveDesktopCpuUsage(platform, version, process string, usage float64) {
 	mi.DesktopClientCPUUsage.With(prometheus.Labels{"platform": platform, "version": version, "processName": process}).Observe(usage)
 }
@@ -2194,6 +2346,37 @@ func (mi *MetricsInterfaceImpl) IncrementAccessControlCacheInvalidation() {
 	mi.AccessControlCacheInvalidation.Inc()
 }
 
+func (mi *MetricsInterfaceImpl) ObserveAutoTranslateTranslateDuration(objectType string, elapsed float64) {
+	mi.AutoTranslateTranslateDuration.With(prometheus.Labels{"object_type": objectType}).Observe(elapsed)
+}
+
+func (mi *MetricsInterfaceImpl) ObserveAutoTranslateLinguaDetectionDuration(elapsed float64) {
+	mi.AutoTranslateLinguaDetectionDuration.Observe(elapsed)
+}
+
+func (mi *MetricsInterfaceImpl) ObserveAutoTranslateProviderCallDuration(provider, result string, elapsed float64) {
+	mi.AutoTranslateProviderCallDuration.With(prometheus.Labels{
+		"provider": provider,
+		"result":   result,
+	}).Observe(elapsed)
+}
+
+func (mi *MetricsInterfaceImpl) SetAutoTranslateQueueDepth(depth float64) {
+	mi.AutoTranslateQueueDepth.Set(depth)
+}
+
+func (mi *MetricsInterfaceImpl) ObserveAutoTranslateWorkerTaskDuration(elapsed float64) {
+	mi.AutoTranslateWorkerTaskDuration.Observe(elapsed)
+}
+
+func (mi *MetricsInterfaceImpl) AddAutoTranslateRecoveryStuckFound(count float64) {
+	mi.AutoTranslateRecoveryStuckFound.Add(count)
+}
+
+func (mi *MetricsInterfaceImpl) IncrementAutoTranslateNormHash(result string) {
+	mi.AutoTranslateNormHashCounter.With(prometheus.Labels{"result": result}).Inc()
+}
+
 func (mi *MetricsInterfaceImpl) ClearMobileClientSessionMetadata() {
 	mi.MobileClientSessionMetadataGauge.Reset()
 }
@@ -2204,12 +2387,12 @@ func extractDBCluster(driver, connectionString string) (string, error) {
 		return "", err
 	}
 
-	clusterEnd := strings.Index(host, ".")
-	if clusterEnd == -1 {
+	cluster, _, found := strings.Cut(host, ".")
+	if !found {
 		return host, nil
 	}
 
-	return host[:clusterEnd], nil
+	return cluster, nil
 }
 
 func extractHost(driver, connectionString string) (string, error) {

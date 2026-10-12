@@ -13,13 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mattermost/mattermost/server/public/model"
-	"github.com/mattermost/mattermost/server/v8/platform/services/remotecluster"
 	"github.com/mattermost/mattermost/server/v8/platform/services/sharedchannel"
 )
 
 // setupTestEnvironment sets up a common test environment for shared channel metadata tests
 func setupTestEnvironment(t *testing.T) (*TestHelper, *sharedchannel.Service) {
-	th := setupForSharedChannels(t).InitBasic()
+	th := setupForSharedChannels(t).InitBasic(t)
 	ss := th.App.Srv().Store()
 	EnsureCleanState(t, th, ss)
 
@@ -54,9 +53,6 @@ func setupTestEnvironment(t *testing.T) (*TestHelper, *sharedchannel.Service) {
 	rcService := th.App.Srv().GetRemoteClusterService()
 	if rcService != nil {
 		_ = rcService.Start()
-		if rc, ok := rcService.(*remotecluster.Service); ok {
-			rc.SetActive(true)
-		}
 		require.True(t, rcService.Active(), "RemoteClusterService should be active")
 	}
 
@@ -81,7 +77,7 @@ func createSharedChannelSetup(t *testing.T, th *TestHelper, service *sharedchann
 	require.NoError(t, err)
 
 	// Create channel with users
-	testChannel := th.CreatePublicChannel()
+	testChannel := th.CreatePublicChannel(t)
 	_, appErr := th.App.AddUserToChannel(th.Context, th.BasicUser, testChannel, false)
 	require.Nil(t, appErr)
 	_, appErr = th.App.AddUserToChannel(th.Context, th.BasicUser2, testChannel, false)
@@ -116,7 +112,6 @@ func createSharedChannelSetup(t *testing.T, th *TestHelper, service *sharedchann
 
 func TestSharedChannelPostMetadataSync(t *testing.T) {
 	th, service := setupTestEnvironment(t)
-	defer th.TearDown()
 
 	t.Run("Post Priority Metadata Self-Referential Sync", func(t *testing.T) {
 		t.Skip("MM-64687")
@@ -149,7 +144,7 @@ func TestSharedChannelPostMetadataSync(t *testing.T) {
 		})
 
 		// Create a local post with priority metadata
-		originalPost, appErr := th.App.CreatePost(th.Context, &model.Post{
+		originalPost, _, appErr := th.App.CreatePost(th.Context, &model.Post{
 			UserId:    th.BasicUser.Id,
 			ChannelId: testChannel.Id,
 			Message:   "Test post with priority metadata @" + th.BasicUser2.Username,
@@ -204,7 +199,7 @@ func TestSharedChannelPostMetadataSync(t *testing.T) {
 		})
 
 		// Create post with acknowledgement request
-		originalPost, appErr := th.App.CreatePost(th.Context, &model.Post{
+		originalPost, _, appErr := th.App.CreatePost(th.Context, &model.Post{
 			UserId:    th.BasicUser.Id,
 			ChannelId: testChannel.Id,
 			Message:   "Test post requesting acknowledgements @" + th.BasicUser2.Username,
@@ -274,7 +269,7 @@ func TestSharedChannelPostMetadataSync(t *testing.T) {
 		})
 
 		// Create post with acknowledgement request
-		originalPost, appErr := th.App.CreatePost(th.Context, &model.Post{
+		originalPost, _, appErr := th.App.CreatePost(th.Context, &model.Post{
 			UserId:    th.BasicUser.Id,
 			ChannelId: testChannel.Id,
 			Message:   "Test post for ack count sync @" + th.BasicUser2.Username,
@@ -370,7 +365,7 @@ func TestSharedChannelPostMetadataSync(t *testing.T) {
 		})
 
 		// Create post with persistent notifications enabled
-		_, appErr := th.App.CreatePost(th.Context, &model.Post{
+		_, _, appErr := th.App.CreatePost(th.Context, &model.Post{
 			UserId:    th.BasicUser.Id,
 			ChannelId: testChannel.Id,
 			Message:   "Test post with persistent notifications @" + th.BasicUser2.Username,
@@ -448,7 +443,7 @@ func TestSharedChannelPostMetadataSync(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create test channel and add local user
-		testChannel := th.CreatePublicChannel()
+		testChannel := th.CreatePublicChannel(t)
 		_, appErr := th.App.AddUserToChannel(th.Context, th.BasicUser, testChannel, false)
 		require.Nil(t, appErr)
 
@@ -456,7 +451,7 @@ func TestSharedChannelPostMetadataSync(t *testing.T) {
 		remoteUserFromClusterB := &model.User{
 			Email:         "remote-user-b@example.com",
 			Username:      "remoteuserb" + model.NewId()[:4],
-			Password:      "password123",
+			Password:      model.NewTestPassword(),
 			EmailVerified: true,
 			RemoteId:      &clusterB.RemoteId,
 		}
@@ -535,7 +530,7 @@ func TestSharedChannelPostMetadataSync(t *testing.T) {
 
 		// STEP 1: Server A creates a post with acknowledgement request
 		t.Log("=== STEP 1: Server A creates post with ack request ===")
-		originalPost, appErr := th.App.CreatePost(th.Context, &model.Post{
+		originalPost, _, appErr := th.App.CreatePost(th.Context, &model.Post{
 			UserId:    th.BasicUser.Id,
 			ChannelId: testChannel.Id,
 			Message:   "Cross-cluster ack test - please acknowledge",

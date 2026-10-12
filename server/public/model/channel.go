@@ -94,13 +94,16 @@ type Channel struct {
 	SchemeId            *string            `json:"scheme_id"`
 	Props               map[string]any     `json:"props"`
 	GroupConstrained    *bool              `json:"group_constrained"`
+	AutoTranslation     bool               `json:"autotranslation"`
 	Shared              *bool              `json:"shared"`
 	TotalMsgCountRoot   int64              `json:"total_msg_count_root"`
 	PolicyID            *string            `json:"policy_id"`
 	LastRootPostAt      int64              `json:"last_root_post_at"`
 	BannerInfo          *ChannelBannerInfo `json:"banner_info"`
 	PolicyEnforced      bool               `json:"policy_enforced"`
+	PolicyIsActive      bool               `json:"policy_is_active"`
 	DefaultCategoryName string             `json:"default_category_name"`
+	ManagedCategoryName string             `json:"managed_category_name"`
 }
 
 func (o *Channel) Auditable() map[string]any {
@@ -122,6 +125,8 @@ func (o *Channel) Auditable() map[string]any {
 		"type":                 o.Type,
 		"update_at":            o.UpdateAt,
 		"policy_enforced":      o.PolicyEnforced,
+		"autotranslation":      o.AutoTranslation,
+		"policy_is_active":     o.PolicyIsActive, // this field is only for logging purposes
 	}
 }
 
@@ -142,12 +147,14 @@ type ChannelsWithCount struct {
 }
 
 type ChannelPatch struct {
-	DisplayName      *string            `json:"display_name"`
-	Name             *string            `json:"name"`
-	Header           *string            `json:"header"`
-	Purpose          *string            `json:"purpose"`
-	GroupConstrained *bool              `json:"group_constrained"`
-	BannerInfo       *ChannelBannerInfo `json:"banner_info"`
+	DisplayName         *string            `json:"display_name"`
+	Name                *string            `json:"name"`
+	Header              *string            `json:"header"`
+	Purpose             *string            `json:"purpose"`
+	GroupConstrained    *bool              `json:"group_constrained"`
+	BannerInfo          *ChannelBannerInfo `json:"banner_info"`
+	AutoTranslation     *bool              `json:"autotranslation"`
+	ManagedCategoryName *string            `json:"managed_category_name"`
 }
 
 func (c *ChannelPatch) Auditable() map[string]any {
@@ -261,10 +268,6 @@ func (o *Channel) DeepCopy() *Channel {
 	return &cCopy
 }
 
-func (o *Channel) Etag() string {
-	return Etag(o.Id, o.UpdateAt)
-}
-
 func (o *Channel) IsValid() *AppError {
 	if !IsValidId(o.Id) {
 		return NewAppError("Channel.IsValid", "model.channel.is_valid.id.app_error", nil, "", http.StatusBadRequest)
@@ -329,6 +332,10 @@ func (o *Channel) IsValid() *AppError {
 		}
 	}
 
+	if o.IsGroupConstrained() && !o.SupportsGroupSync() {
+		return NewAppError("Channel.IsValid", "model.channel.is_valid.group_constrained.app_error", nil, "id="+o.Id, http.StatusBadRequest)
+	}
+
 	return nil
 }
 
@@ -354,6 +361,11 @@ func (o *Channel) PreUpdate() {
 
 func (o *Channel) IsGroupOrDirect() bool {
 	return o.Type == ChannelTypeDirect || o.Type == ChannelTypeGroup
+}
+
+// SupportsGroupSync reports whether group_constrained is meaningful for the channel type.
+func (o *Channel) SupportsGroupSync() bool {
+	return o.Type == ChannelTypeOpen || o.Type == ChannelTypePrivate
 }
 
 func (o *Channel) IsOpen() bool {
@@ -398,6 +410,10 @@ func (o *Channel) Patch(patch *ChannelPatch) {
 		if patch.BannerInfo.BackgroundColor != nil {
 			o.BannerInfo.BackgroundColor = patch.BannerInfo.BackgroundColor
 		}
+	}
+
+	if patch.AutoTranslation != nil {
+		o.AutoTranslation = *patch.AutoTranslation
 	}
 }
 

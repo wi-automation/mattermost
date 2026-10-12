@@ -23,7 +23,7 @@ func newPropertyValueStore(sqlStore *SqlStore) store.PropertyValueStore {
 	s := SqlPropertyValueStore{SqlStore: sqlStore}
 
 	s.tableSelectQuery = s.getQueryBuilder().
-		Select("ID", "TargetID", "TargetType", "GroupID", "FieldID", "Value", "CreateAt", "UpdateAt", "DeleteAt").
+		Select("ID", "TargetID", "TargetType", "GroupID", "FieldID", "Value", "CreateAt", "UpdateAt", "DeleteAt", "COALESCE(CreatedBy, '') as CreatedBy", "COALESCE(UpdatedBy, '') as UpdatedBy").
 		From("PropertyValues")
 
 	return &s
@@ -47,13 +47,53 @@ func (s *SqlPropertyValueStore) Create(value *model.PropertyValue) (*model.Prope
 
 	builder := s.getQueryBuilder().
 		Insert("PropertyValues").
-		Columns("ID", "TargetID", "TargetType", "GroupID", "FieldID", "Value", "CreateAt", "UpdateAt", "DeleteAt").
-		Values(value.ID, value.TargetID, value.TargetType, value.GroupID, value.FieldID, valueJSON, value.CreateAt, value.UpdateAt, value.DeleteAt)
+		Columns("ID", "TargetID", "TargetType", "GroupID", "FieldID", "Value", "CreateAt", "UpdateAt", "DeleteAt", "CreatedBy", "UpdatedBy").
+		Values(value.ID, value.TargetID, value.TargetType, value.GroupID, value.FieldID, valueJSON, value.CreateAt, value.UpdateAt, value.DeleteAt, value.CreatedBy, value.UpdatedBy)
 	if _, err := s.GetMaster().ExecBuilder(builder); err != nil {
 		return nil, errors.Wrap(err, "property_value_create_insert")
 	}
 
 	return value, nil
+}
+
+func (s *SqlPropertyValueStore) CreateMany(values []*model.PropertyValue) ([]*model.PropertyValue, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+
+	transaction, err := s.GetMaster().Beginx()
+	if err != nil {
+		return nil, errors.Wrap(err, "property_value_create_many_begin_transaction")
+	}
+	defer finalizeTransactionX(transaction, &err)
+
+	for _, value := range values {
+		value.PreSave()
+
+		if err := value.IsValid(); err != nil {
+			return nil, errors.Wrap(err, "property_value_create_many_isvalid")
+		}
+
+		valueJSON := value.Value
+		if s.IsBinaryParamEnabled() {
+			valueJSON = AppendBinaryFlag(valueJSON)
+		}
+
+		builder := s.getQueryBuilder().
+			Insert("PropertyValues").
+			Columns("ID", "TargetID", "TargetType", "GroupID", "FieldID", "Value", "CreateAt", "UpdateAt", "DeleteAt", "CreatedBy", "UpdatedBy").
+			Values(value.ID, value.TargetID, value.TargetType, value.GroupID, value.FieldID, valueJSON, value.CreateAt, value.UpdateAt, value.DeleteAt, value.CreatedBy, value.UpdatedBy)
+
+		if _, err := transaction.ExecBuilder(builder); err != nil {
+			return nil, errors.Wrap(err, "property_value_create_many_exec")
+		}
+	}
+
+	if err := transaction.Commit(); err != nil {
+		return nil, errors.Wrap(err, "property_value_create_many_commit_transaction")
+	}
+
+	return values, nil
 }
 
 func (s *SqlPropertyValueStore) Get(groupID, id string) (*model.PropertyValue, error) {
@@ -84,7 +124,7 @@ func (s *SqlPropertyValueStore) GetMany(groupID string, ids []string) ([]*model.
 	}
 
 	if len(values) < len(ids) {
-		return nil, fmt.Errorf("missmatch results: got %d results of the %d ids passed", len(values), len(ids))
+		return nil, store.NewErrResultsMismatch(len(values), len(ids))
 	}
 
 	return values, nil
@@ -133,6 +173,14 @@ func (s *SqlPropertyValueStore) SearchPropertyValues(opts model.PropertyValueSea
 		builder = builder.Where(sq.Eq{"FieldID": opts.FieldID})
 	}
 
+	if opts.SinceUpdateAt > 0 {
+		builder = builder.Where(sq.Gt{"UpdateAt": opts.SinceUpdateAt})
+	}
+
+	if opts.Value != nil {
+		builder = builder.Where(sq.Eq{"Value": string(opts.Value)})
+	}
+
 	var values []*model.PropertyValue
 	if err := s.GetReplica().SelectBuilder(&values, builder); err != nil {
 		return nil, errors.Wrap(err, "property_value_search_query")
@@ -153,9 +201,9 @@ func (s *SqlPropertyValueStore) Update(groupID string, values []*model.PropertyV
 	defer finalizeTransactionX(transaction, &err)
 
 	updateTime := model.GetMillis()
-	isPostgres := s.DriverName() == model.DatabaseDriverPostgres
 	valueCase := sq.Case("id")
 	deleteAtCase := sq.Case("id")
+	updatedByCase := sq.Case("id")
 	ids := make([]string, len(values))
 
 	for i, value := range values {
@@ -170,13 +218,9 @@ func (s *SqlPropertyValueStore) Update(groupID string, values []*model.PropertyV
 			valueJSON = AppendBinaryFlag(valueJSON)
 		}
 
-		if isPostgres {
-			valueCase = valueCase.When(sq.Expr("?", value.ID), sq.Expr("?::jsonb", valueJSON))
-			deleteAtCase = deleteAtCase.When(sq.Expr("?", value.ID), sq.Expr("?::bigint", value.DeleteAt))
-		} else {
-			valueCase = valueCase.When(sq.Expr("?", value.ID), sq.Expr("?", valueJSON))
-			deleteAtCase = deleteAtCase.When(sq.Expr("?", value.ID), sq.Expr("?", value.DeleteAt))
-		}
+		valueCase = valueCase.When(sq.Expr("?", value.ID), sq.Expr("?::jsonb", valueJSON))
+		deleteAtCase = deleteAtCase.When(sq.Expr("?", value.ID), sq.Expr("?::bigint", value.DeleteAt))
+		updatedByCase = updatedByCase.When(sq.Expr("?", value.ID), sq.Expr("?::text", value.UpdatedBy))
 	}
 
 	builder := s.getQueryBuilder().
@@ -184,6 +228,7 @@ func (s *SqlPropertyValueStore) Update(groupID string, values []*model.PropertyV
 		Set("Value", valueCase).
 		Set("DeleteAt", deleteAtCase).
 		Set("UpdateAt", updateTime).
+		Set("UpdatedBy", updatedByCase).
 		Where(sq.Eq{"id": ids})
 
 	if groupID != "" {
@@ -238,14 +283,15 @@ func (s *SqlPropertyValueStore) Upsert(values []*model.PropertyValue) (_ []*mode
 
 		builder := s.getQueryBuilder().
 			Insert("PropertyValues").
-			Columns("ID", "TargetID", "TargetType", "GroupID", "FieldID", "Value", "CreateAt", "UpdateAt", "DeleteAt").
-			Values(value.ID, value.TargetID, value.TargetType, value.GroupID, value.FieldID, valueJSON, value.CreateAt, value.UpdateAt, value.DeleteAt)
+			Columns("ID", "TargetID", "TargetType", "GroupID", "FieldID", "Value", "CreateAt", "UpdateAt", "DeleteAt", "CreatedBy", "UpdatedBy").
+			Values(value.ID, value.TargetID, value.TargetType, value.GroupID, value.FieldID, valueJSON, value.CreateAt, value.UpdateAt, value.DeleteAt, value.CreatedBy, value.UpdatedBy)
 
 		builder = builder.SuffixExpr(sq.Expr(
-			"ON CONFLICT (GroupID, TargetID, FieldID) WHERE DeleteAt = 0 DO UPDATE SET Value = ?, UpdateAt = ?, DeleteAt = ? RETURNING *",
+			"ON CONFLICT (GroupID, TargetID, FieldID) WHERE DeleteAt = 0 DO UPDATE SET Value = ?, UpdateAt = ?, DeleteAt = ?, UpdatedBy = ? RETURNING ID, TargetID, TargetType, GroupID, FieldID, Value, CreateAt, UpdateAt, DeleteAt, COALESCE(CreatedBy, '') as CreatedBy, COALESCE(UpdatedBy, '') as UpdatedBy",
 			valueJSON,
 			value.UpdateAt,
 			0,
+			value.UpdatedBy,
 		))
 
 		var values []*model.PropertyValue

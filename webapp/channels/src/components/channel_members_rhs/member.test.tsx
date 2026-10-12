@@ -1,13 +1,12 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-import userEvent from '@testing-library/user-event';
 import React from 'react';
 
 import type {ChannelType} from '@mattermost/types/channels';
 import type {UserProfile} from '@mattermost/types/users';
 
-import {renderWithContext, screen, waitFor, act} from 'tests/react_testing_utils';
+import {renderWithContext, screen, waitFor, userEvent} from 'tests/react_testing_utils';
 
 import Member from './member';
 import type {ChannelMember} from './member_list';
@@ -197,13 +196,10 @@ describe('components/channel_members_rhs/Member', () => {
         const icon = screen.getByTestId('SharedChannelIcon');
         expect(icon).toBeInTheDocument();
 
-        await act(async () => {
-            userEvent.hover(icon);
-            jest.advanceTimersByTime(1000);
+        await userEvent.hover(icon, {advanceTimers: jest.advanceTimersByTime});
 
-            await waitFor(() => {
-                expect(screen.getByText('Shared with: Remote Organization')).toBeInTheDocument();
-            });
+        await waitFor(() => {
+            expect(screen.getByText('Shared with: Remote Organization')).toBeInTheDocument();
         });
     });
 
@@ -229,13 +225,10 @@ describe('components/channel_members_rhs/Member', () => {
         const icon = screen.getByTestId('SharedChannelIcon');
         expect(icon).toBeInTheDocument();
 
-        await act(async () => {
-            userEvent.hover(icon);
-            jest.advanceTimersByTime(1000);
+        await userEvent.hover(icon, {advanceTimers: jest.advanceTimersByTime});
 
-            await waitFor(() => {
-                expect(screen.getByText('Shared with trusted organizations')).toBeInTheDocument();
-            });
+        await waitFor(() => {
+            expect(screen.getByText('Shared with trusted organizations')).toBeInTheDocument();
         });
     });
 
@@ -262,6 +255,5 @@ describe('components/channel_members_rhs/Member', () => {
     afterEach(() => {
         jest.clearAllTimers();
         jest.useRealTimers();
-        jest.clearAllMocks();
     });
 });

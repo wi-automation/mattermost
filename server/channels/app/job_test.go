@@ -15,7 +15,6 @@ import (
 func TestGetJob(t *testing.T) {
 	mainHelper.Parallel(t)
 	th := Setup(t)
-	defer th.TearDown()
 
 	status := &model.Job{
 		Id:     model.NewId(),
@@ -37,7 +36,6 @@ func TestGetJob(t *testing.T) {
 func TestSessionHasPermissionToCreateJob(t *testing.T) {
 	mainHelper.Parallel(t)
 	th := Setup(t)
-	defer th.TearDown()
 
 	jobs := []model.Job{
 		{
@@ -109,11 +107,10 @@ func TestSessionHasPermissionToCreateJob(t *testing.T) {
 
 func TestSessionHasPermissionToCreateAccessControlSyncJob(t *testing.T) {
 	mainHelper.Parallel(t)
-	th := Setup(t).InitBasic()
-	defer th.TearDown()
+	th := Setup(t).InitBasic(t)
 
 	// Create a private channel and make BasicUser a channel admin
-	privateChannel := th.CreatePrivateChannel(th.Context, th.BasicTeam)
+	privateChannel := th.CreatePrivateChannel(t, th.BasicTeam)
 	_, err := th.App.AddUserToChannel(th.Context, th.BasicUser, privateChannel, false)
 	require.Nil(t, err)
 
@@ -162,7 +159,7 @@ func TestSessionHasPermissionToCreateAccessControlSyncJob(t *testing.T) {
 
 	t.Run("channel admin cannot create access control sync job for other channel", func(t *testing.T) {
 		// Create another private channel that BasicUser is NOT admin of
-		otherChannel := th.CreatePrivateChannel(th.Context, th.BasicTeam)
+		otherChannel := th.CreatePrivateChannel(t, th.BasicTeam)
 
 		// EXPLICITLY remove channel admin role from BasicUser for otherChannel
 		// (CreatePrivateChannel might auto-add admin roles)
@@ -196,8 +193,118 @@ func TestSessionHasPermissionToCreateAccessControlSyncJob(t *testing.T) {
 		assert.Equal(t, model.PermissionManageSystem.Id, permissionRequired.Id)
 	})
 
+	t.Run("team admin can create team-scoped sync job with team_id only", func(t *testing.T) {
+		teamAdmin := th.CreateUser(t)
+		th.LinkUserToTeam(t, teamAdmin, th.BasicTeam)
+		_, appErr := th.App.UpdateTeamMemberRoles(th.Context, th.BasicTeam.Id, teamAdmin.Id, "team_user team_admin")
+		require.Nil(t, appErr)
+
+		teamAdminSession := model.Session{
+			UserId: teamAdmin.Id,
+			Roles:  model.SystemUserRoleId,
+			TeamMembers: []*model.TeamMember{
+				{TeamId: th.BasicTeam.Id, UserId: teamAdmin.Id, Roles: "team_user team_admin"},
+			},
+		}
+
+		jobWithTeamOnly := model.Job{
+			Id:   model.NewId(),
+			Type: model.JobTypeAccessControlSync,
+			Data: model.StringMap{
+				"team_id": th.BasicTeam.Id,
+			},
+		}
+
+		hasPermission, permissionRequired := th.App.SessionHasPermissionToCreateJob(teamAdminSession, &jobWithTeamOnly)
+		assert.True(t, hasPermission)
+		require.NotNil(t, permissionRequired)
+		assert.Equal(t, model.PermissionManageTeamAccessRules.Id, permissionRequired.Id)
+	})
+
+	t.Run("team admin can create policy-scoped sync job for their owned policy", func(t *testing.T) {
+		teamAdmin := th.CreateUser(t)
+		th.LinkUserToTeam(t, teamAdmin, th.BasicTeam)
+		_, appErr := th.App.UpdateTeamMemberRoles(th.Context, th.BasicTeam.Id, teamAdmin.Id, "team_user team_admin")
+		require.Nil(t, appErr)
+
+		// Build ownership via the real parent->child channel relationship, then reconcile scope.
+		parentPolicy := &model.AccessControlPolicy{
+			ID:      model.NewId(),
+			Name:    "team-owned-policy",
+			Type:    model.AccessControlPolicyTypeParent,
+			Version: model.AccessControlPolicyVersionV0_2,
+			Rules:   []model.AccessControlPolicyRule{{Actions: []string{"*"}, Expression: "true"}},
+		}
+		savedParent, storeErr := th.App.Srv().Store().AccessControlPolicy().Save(th.Context, parentPolicy)
+		require.NoError(t, storeErr)
+
+		channel := th.CreatePrivateChannel(t, th.BasicTeam)
+		childPolicy := &model.AccessControlPolicy{
+			ID:      channel.Id,
+			Type:    model.AccessControlPolicyTypeChannel,
+			Version: model.AccessControlPolicyVersionV0_2,
+		}
+		require.Nil(t, childPolicy.Inherit(savedParent))
+		_, storeErr = th.App.Srv().Store().AccessControlPolicy().Save(th.Context, childPolicy)
+		require.NoError(t, storeErr)
+
+		appErr = th.App.ReconcilePolicyTeamScope(th.Context, savedParent.ID)
+		require.Nil(t, appErr)
+
+		teamAdminSession := model.Session{
+			UserId: teamAdmin.Id,
+			Roles:  model.SystemUserRoleId,
+			TeamMembers: []*model.TeamMember{
+				{TeamId: th.BasicTeam.Id, UserId: teamAdmin.Id, Roles: "team_user team_admin"},
+			},
+		}
+
+		jobWithOwnedPolicy := model.Job{
+			Id:   model.NewId(),
+			Type: model.JobTypeAccessControlSync,
+			Data: model.StringMap{
+				"team_id":   th.BasicTeam.Id,
+				"policy_id": savedParent.ID,
+			},
+		}
+
+		hasPermission, permissionRequired := th.App.SessionHasPermissionToCreateJob(teamAdminSession, &jobWithOwnedPolicy)
+		assert.True(t, hasPermission)
+		require.NotNil(t, permissionRequired)
+		assert.Equal(t, model.PermissionManageTeamAccessRules.Id, permissionRequired.Id)
+	})
+
+	t.Run("team admin cannot smuggle a foreign policy_id alongside their team_id", func(t *testing.T) {
+		teamAdmin := th.CreateUser(t)
+		th.LinkUserToTeam(t, teamAdmin, th.BasicTeam)
+		_, appErr := th.App.UpdateTeamMemberRoles(th.Context, th.BasicTeam.Id, teamAdmin.Id, "team_user team_admin")
+		require.Nil(t, appErr)
+
+		teamAdminSession := model.Session{
+			UserId: teamAdmin.Id,
+			Roles:  model.SystemUserRoleId,
+			TeamMembers: []*model.TeamMember{
+				{TeamId: th.BasicTeam.Id, UserId: teamAdmin.Id, Roles: "team_user team_admin"},
+			},
+		}
+
+		jobWithPolicyAndTeam := model.Job{
+			Id:   model.NewId(),
+			Type: model.JobTypeAccessControlSync,
+			Data: model.StringMap{
+				"team_id":   th.BasicTeam.Id,
+				"policy_id": model.NewId(), // foreign policy the team admin does not own
+			},
+		}
+
+		hasPermission, permissionRequired := th.App.SessionHasPermissionToCreateJob(teamAdminSession, &jobWithPolicyAndTeam)
+		assert.False(t, hasPermission)
+		require.NotNil(t, permissionRequired)
+		assert.Equal(t, model.PermissionManageSystem.Id, permissionRequired.Id)
+	})
+
 	t.Run("regular user cannot create access control sync job", func(t *testing.T) {
-		regularUser := th.CreateUser()
+		regularUser := th.CreateUser(t)
 		regularUserSession := model.Session{
 			UserId: regularUser.Id,
 			Roles:  model.SystemUserRoleId,
@@ -219,10 +326,181 @@ func TestSessionHasPermissionToCreateAccessControlSyncJob(t *testing.T) {
 	})
 }
 
+func TestCreateAccessControlSyncJob(t *testing.T) {
+	mainHelper.Parallel(t)
+	th := Setup(t).InitBasic(t)
+
+	t.Run("cancels pending job and creates new one", func(t *testing.T) {
+		// Create an existing pending job manually in the store
+		existingJob := &model.Job{
+			Id:     model.NewId(),
+			Type:   model.JobTypeAccessControlSync,
+			Status: model.JobStatusPending,
+			Data: map[string]string{
+				"policy_id": "channel456",
+			},
+		}
+		_, err := th.App.Srv().Store().Job().Save(existingJob)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_, stErr := th.App.Srv().Store().Job().Delete(existingJob.Id)
+			require.NoError(t, stErr)
+		})
+
+		// Test the cancellation logic by calling the method directly
+		existingJobs, storeErr := th.App.Srv().Store().Job().GetByTypeAndData(th.Context, model.JobTypeAccessControlSync, map[string]string{
+			"policy_id": "channel456",
+		}, false, model.JobStatusPending, model.JobStatusInProgress)
+		require.NoError(t, storeErr)
+		require.Len(t, existingJobs, 1)
+
+		// Verify that the store method finds the job
+		assert.Equal(t, existingJob.Id, existingJobs[0].Id)
+		assert.Equal(t, model.JobStatusPending, existingJobs[0].Status)
+
+		// Test the cancellation logic directly
+		for _, job := range existingJobs {
+			if job.Status == model.JobStatusPending || job.Status == model.JobStatusInProgress {
+				appErr := th.App.CancelJob(th.Context, job.Id)
+				require.Nil(t, appErr)
+			}
+		}
+
+		// Verify that the job was cancelled
+		updatedJob, getErr := th.App.Srv().Store().Job().Get(th.Context, existingJob.Id)
+		require.NoError(t, getErr)
+		// Job should be either cancel_requested or canceled (async process)
+		assert.Contains(t, []string{model.JobStatusCancelRequested, model.JobStatusCanceled}, updatedJob.Status)
+	})
+
+	t.Run("cancels in-progress job and creates new one", func(t *testing.T) {
+		// Create an existing in-progress job
+		existingJob := &model.Job{
+			Id:     model.NewId(),
+			Type:   model.JobTypeAccessControlSync,
+			Status: model.JobStatusInProgress,
+			Data: map[string]string{
+				"policy_id": "channel789",
+			},
+		}
+		_, err := th.App.Srv().Store().Job().Save(existingJob)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_, stErr := th.App.Srv().Store().Job().Delete(existingJob.Id)
+			require.NoError(t, stErr)
+		})
+
+		// Test that GetByTypeAndData finds the in-progress job
+		existingJobs, storeErr := th.App.Srv().Store().Job().GetByTypeAndData(th.Context, model.JobTypeAccessControlSync, map[string]string{
+			"policy_id": "channel789",
+		}, false, model.JobStatusPending, model.JobStatusInProgress)
+		require.NoError(t, storeErr)
+		require.Len(t, existingJobs, 1)
+		assert.Equal(t, model.JobStatusInProgress, existingJobs[0].Status)
+
+		// Test cancellation of in-progress job
+		appErr := th.App.CancelJob(th.Context, existingJob.Id)
+		require.Nil(t, appErr)
+
+		// Verify cancellation was requested (job cancellation is asynchronous)
+		updatedJob, getErr := th.App.Srv().Store().Job().Get(th.Context, existingJob.Id)
+		require.NoError(t, getErr)
+		// Job should be either cancel_requested or canceled (async process)
+		assert.Contains(t, []string{model.JobStatusCancelRequested, model.JobStatusCanceled}, updatedJob.Status)
+	})
+
+	t.Run("leaves completed jobs alone", func(t *testing.T) {
+		// Create an existing completed job
+		existingJob := &model.Job{
+			Id:     model.NewId(),
+			Type:   model.JobTypeAccessControlSync,
+			Status: model.JobStatusSuccess,
+			Data: map[string]string{
+				"policy_id": "channel101",
+			},
+		}
+		_, err := th.App.Srv().Store().Job().Save(existingJob)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_, stErr := th.App.Srv().Store().Job().Delete(existingJob.Id)
+			require.NoError(t, stErr)
+		})
+
+		// Test that GetByTypeAndData finds the completed job
+		existingJobs, storeErr := th.App.Srv().Store().Job().GetByTypeAndData(th.Context, model.JobTypeAccessControlSync, map[string]string{
+			"policy_id": "channel101",
+		}, false)
+		require.NoError(t, storeErr)
+		require.Len(t, existingJobs, 1)
+		assert.Equal(t, model.JobStatusSuccess, existingJobs[0].Status)
+
+		// Test that we don't cancel completed jobs (logic test)
+		shouldCancel := existingJob.Status == model.JobStatusPending || existingJob.Status == model.JobStatusInProgress
+		assert.False(t, shouldCancel, "Should not cancel completed jobs")
+
+		// Verify the job status is unchanged
+		updatedJob, getErr := th.App.Srv().Store().Job().Get(th.Context, existingJob.Id)
+		require.NoError(t, getErr)
+		assert.Equal(t, model.JobStatusSuccess, updatedJob.Status)
+	})
+
+	// Test deduplication logic with status filtering to ensure database optimization works correctly
+
+	t.Run("deduplication respects status filtering", func(t *testing.T) {
+		// Create jobs with different statuses
+		pendingJob := &model.Job{
+			Id:     model.NewId(),
+			Type:   model.JobTypeAccessControlSync,
+			Status: model.JobStatusPending,
+			Data:   map[string]string{"policy_id": "channel999"},
+		}
+
+		completedJob := &model.Job{
+			Id:     model.NewId(),
+			Type:   model.JobTypeAccessControlSync,
+			Status: model.JobStatusSuccess,
+			Data:   map[string]string{"policy_id": "channel999"},
+		}
+
+		for _, job := range []*model.Job{pendingJob, completedJob} {
+			_, err := th.App.Srv().Store().Job().Save(job)
+			require.NoError(t, err)
+
+			// Capture job ID to avoid closure variable capture issue
+			jobID := job.Id
+			t.Cleanup(func() {
+				_, stErr := th.App.Srv().Store().Job().Delete(jobID)
+				require.NoError(t, stErr)
+			})
+		}
+
+		// Verify status filtering returns only active jobs
+		activeJobs, err := th.App.Srv().Store().Job().GetByTypeAndData(
+			th.Context,
+			model.JobTypeAccessControlSync,
+			map[string]string{"policy_id": "channel999"},
+			false,
+			model.JobStatusPending, model.JobStatusInProgress, // Only active statuses
+		)
+		require.NoError(t, err)
+		require.Len(t, activeJobs, 1, "Should only find active jobs (pending/in-progress)")
+		assert.Equal(t, pendingJob.Id, activeJobs[0].Id, "Should find the pending job")
+
+		// Verify all jobs are returned when no status filter is provided
+		allJobs, err := th.App.Srv().Store().Job().GetByTypeAndData(
+			th.Context,
+			model.JobTypeAccessControlSync,
+			map[string]string{"policy_id": "channel999"},
+			false, // No status filter
+		)
+		require.NoError(t, err)
+		require.Len(t, allJobs, 2, "Should find all jobs when no status filter")
+	})
+}
+
 func TestSessionHasPermissionToReadJob(t *testing.T) {
 	mainHelper.Parallel(t)
 	th := Setup(t)
-	defer th.TearDown()
 
 	jobs := []model.Job{
 		{
@@ -307,7 +585,6 @@ func TestSessionHasPermissionToReadJob(t *testing.T) {
 func TestGetJobByType(t *testing.T) {
 	mainHelper.Parallel(t)
 	th := Setup(t)
-	defer th.TearDown()
 
 	jobType := model.NewId()
 
@@ -353,7 +630,6 @@ func TestGetJobByType(t *testing.T) {
 func TestGetJobsByTypes(t *testing.T) {
 	mainHelper.Parallel(t)
 	th := Setup(t)
-	defer th.TearDown()
 
 	jobType := model.NewId()
 	jobType1 := model.NewId()

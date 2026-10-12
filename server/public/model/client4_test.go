@@ -17,6 +17,7 @@ import (
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // https://github.com/mattermost/mattermost-plugin-starter-template/issues/115
@@ -36,7 +37,7 @@ func TestClient4TrimTrailingSlash(t *testing.T) {
 func TestClient4CreatePost(t *testing.T) {
 	post := &model.Post{
 		Props: map[string]any{
-			model.PostPropsAttachments: []*model.SlackAttachment{
+			model.PostPropsAttachments: []*model.MessageAttachment{
 				{
 					Actions: []*model.PostAction{
 						{
@@ -60,7 +61,7 @@ func TestClient4CreatePost(t *testing.T) {
 		err := json.NewDecoder(r.Body).Decode(&post)
 		assert.NoError(t, err)
 		attachments := post.Attachments()
-		assert.Equal(t, []*model.SlackAttachment{
+		assert.Equal(t, []*model.MessageAttachment{
 			{
 				Actions: []*model.PostAction{
 					{
@@ -379,4 +380,44 @@ func ExampleClient4_GetUsers() {
 
 		page++
 	}
+}
+
+func TestBuildResponse(t *testing.T) {
+	t.Run("handles nil http.Response", func(t *testing.T) {
+		response := model.BuildResponse(nil)
+		assert.Nil(t, response)
+	})
+	t.Run("builds response from http.Response", func(t *testing.T) {
+		httpResp := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+		}
+		httpResp.Header.Set(model.HeaderRequestId, "test-request-id")
+		httpResp.Header.Set(model.HeaderEtagServer, "test-etag")
+		httpResp.Header.Set(model.HeaderVersionId, "test-version")
+
+		response := model.BuildResponse(httpResp)
+		require.NotNil(t, response)
+
+		assert.Equal(t, http.StatusOK, response.StatusCode)
+		assert.Equal(t, "test-request-id", response.RequestId)
+		assert.Equal(t, "test-etag", response.Etag)
+		assert.Equal(t, "test-version", response.ServerVersion)
+		assert.Equal(t, httpResp.Header, response.Header)
+	})
+	t.Run("handles response with empty headers", func(t *testing.T) {
+		httpResp := &http.Response{
+			StatusCode: http.StatusNoContent,
+			Header:     http.Header{},
+		}
+
+		response := model.BuildResponse(httpResp)
+		require.NotNil(t, response)
+
+		assert.Equal(t, http.StatusNoContent, response.StatusCode)
+		assert.Empty(t, response.RequestId)
+		assert.Empty(t, response.Etag)
+		assert.Empty(t, response.ServerVersion)
+		assert.Equal(t, httpResp.Header, response.Header)
+	})
 }

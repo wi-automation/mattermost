@@ -69,15 +69,44 @@ type FeatureFlags struct {
 
 	AttributeBasedAccessControl bool
 
+	// Enable permission policies (file upload/download ABAC policies).
+	// Requires AttributeBasedAccessControl to also be enabled.
+	PermissionPolicies bool
+
 	ContentFlagging bool
 
 	// Enable AppsForm for Interactive Dialogs instead of legacy dialog implementation
 	InteractiveDialogAppsForm bool
 
 	EnableMattermostEntry bool
-	// FEATURE_FLAG_REMOVAL: ChannelAdminManageABACRules - Remove this field when feature is GA
-	// Enable channel admins to manage ABAC rules for their channels
-	ChannelAdminManageABACRules bool
+
+	// DEPRECATED: Mobile SSO SAML code-exchange flow - disabled by default
+	// This feature is deprecated and will be removed in a future release.
+	// Mobile clients should use the direct SSO callback flow with srv parameter verification.
+	MobileSSOCodeExchange bool
+
+	// FEATURE_FLAG_REMOVAL: AutoTranslation - Remove this when MVP is to be released
+	// Enable auto-translation feature for messages in channels
+	AutoTranslation bool
+
+	// Enable burn-on-read messages that automatically delete after viewing
+	BurnOnRead bool
+
+	// FEATURE_FLAG_REMOVAL: EnableAIPluginBridge
+	EnableAIPluginBridge bool
+
+	// FEATURE_FLAG_REMOVAL: EnableAIRecaps - Remove this when GA is released
+	EnableAIRecaps bool
+
+	// FEATURE_FLAG_REMOVAL: IntegratedBoards - Remove this when GA is released
+	// Enable the Integrated Boards feature within Mattermost channels
+	IntegratedBoards bool
+
+	// Enable LIKE-based CJK (Chinese, Japanese, Korean) search for PostgreSQL
+	CJKSearch bool
+
+	// ManagedChannelCategories enables server-side managed sidebar category enforcement (Enterprise).
+	ManagedChannelCategories bool
 }
 
 func (f *FeatureFlags) SetDefaults() {
@@ -106,18 +135,35 @@ func (f *FeatureFlags) SetDefaults() {
 	f.ExperimentalAuditSettingsSystemConsoleUI = true
 	f.CustomProfileAttributes = true
 	f.AttributeBasedAccessControl = true
-	f.ContentFlagging = false
+	f.PermissionPolicies = false
+	f.ContentFlagging = true
 	f.InteractiveDialogAppsForm = true
 	f.EnableMattermostEntry = true
-	// FEATURE_FLAG_REMOVAL: ChannelAdminManageABACRules - Remove this default when feature is GA
-	f.ChannelAdminManageABACRules = false // Default to false for safety
+
+	// DEPRECATED: Disabled by default - mobile clients use direct SSO callback flow
+	f.MobileSSOCodeExchange = false
+
+	f.AutoTranslation = true
+
+	f.BurnOnRead = true
+
+	// FEATURE_FLAG_REMOVAL: EnableAIPluginBridge - Remove this default when MVP is to be released
+	f.EnableAIPluginBridge = false
+
+	f.EnableAIRecaps = false
+
+	f.IntegratedBoards = false
+
+	f.CJKSearch = false
+
+	f.ManagedChannelCategories = false
 }
 
 // ToMap returns the feature flags as a map[string]string
 // Supports boolean and string feature flags.
 func (f *FeatureFlags) ToMap() map[string]string {
 	refStructVal := reflect.ValueOf(*f)
-	refStructType := reflect.TypeOf(*f)
+	refStructType := reflect.TypeFor[FeatureFlags]()
 	ret := make(map[string]string)
 	for i := 0; i < refStructVal.NumField(); i++ {
 		refFieldVal := refStructVal.Field(i)

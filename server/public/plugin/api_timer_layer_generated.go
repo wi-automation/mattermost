@@ -895,6 +895,13 @@ func (api *apiTimerLayer) GetFile(fileId string) ([]byte, *model.AppError) {
 	return _returnsA, _returnsB
 }
 
+func (api *apiTimerLayer) HasPermissionToFileAction(sessionID, fileID, action string) bool {
+	startTime := timePkg.Now()
+	_returnsA := api.apiImpl.HasPermissionToFileAction(sessionID, fileID, action)
+	api.recordTime(startTime, "HasPermissionToFileAction", true)
+	return _returnsA
+}
+
 func (api *apiTimerLayer) GetFileLink(fileId string) (string, *model.AppError) {
 	startTime := timePkg.Now()
 	_returnsA, _returnsB := api.apiImpl.GetFileLink(fileId)
@@ -927,6 +934,13 @@ func (api *apiTimerLayer) OpenInteractiveDialog(dialog model.OpenDialogRequest) 
 	startTime := timePkg.Now()
 	_returnsA := api.apiImpl.OpenInteractiveDialog(dialog)
 	api.recordTime(startTime, "OpenInteractiveDialog", _returnsA == nil)
+	return _returnsA
+}
+
+func (api *apiTimerLayer) SendToastMessage(userID, connectionID, message string, options model.SendToastMessageOptions) *model.AppError {
+	startTime := timePkg.Now()
+	_returnsA := api.apiImpl.SendToastMessage(userID, connectionID, message, options)
+	api.recordTime(startTime, "SendToastMessage", _returnsA == nil)
 	return _returnsA
 }
 
@@ -1324,6 +1338,13 @@ func (api *apiTimerLayer) UnregisterPluginForSharedChannels(pluginID string) err
 	return _returnsA
 }
 
+func (api *apiTimerLayer) UnregisterPluginRemoteForSharedChannels(remoteID string) error {
+	startTime := timePkg.Now()
+	_returnsA := api.apiImpl.UnregisterPluginRemoteForSharedChannels(remoteID)
+	api.recordTime(startTime, "UnregisterPluginRemoteForSharedChannels", _returnsA == nil)
+	return _returnsA
+}
+
 func (api *apiTimerLayer) ShareChannel(sc *model.SharedChannel) (*model.SharedChannel, error) {
 	startTime := timePkg.Now()
 	_returnsA, _returnsB := api.apiImpl.ShareChannel(sc)
@@ -1370,6 +1391,27 @@ func (api *apiTimerLayer) UninviteRemoteFromChannel(channelID string, remoteID s
 	startTime := timePkg.Now()
 	_returnsA := api.apiImpl.UninviteRemoteFromChannel(channelID, remoteID)
 	api.recordTime(startTime, "UninviteRemoteFromChannel", _returnsA == nil)
+	return _returnsA
+}
+
+func (api *apiTimerLayer) ReceiveSharedChannelSyncMsg(remoteID string, msg *model.SyncMsg) (model.SyncResponse, error) {
+	startTime := timePkg.Now()
+	_returnsA, _returnsB := api.apiImpl.ReceiveSharedChannelSyncMsg(remoteID, msg)
+	api.recordTime(startTime, "ReceiveSharedChannelSyncMsg", _returnsB == nil)
+	return _returnsA, _returnsB
+}
+
+func (api *apiTimerLayer) ReceiveSharedChannelAttachmentSyncMsg(remoteID, channelID string, fi *model.FileInfo, data io.Reader) (*model.FileInfo, error) {
+	startTime := timePkg.Now()
+	_returnsA, _returnsB := api.apiImpl.ReceiveSharedChannelAttachmentSyncMsg(remoteID, channelID, fi, data)
+	api.recordTime(startTime, "ReceiveSharedChannelAttachmentSyncMsg", _returnsB == nil)
+	return _returnsA, _returnsB
+}
+
+func (api *apiTimerLayer) ReceiveSharedChannelProfileImageSyncMsg(remoteID, userID string, image []byte) error {
+	startTime := timePkg.Now()
+	_returnsA := api.apiImpl.ReceiveSharedChannelProfileImageSyncMsg(remoteID, userID, image)
+	api.recordTime(startTime, "ReceiveSharedChannelProfileImageSyncMsg", _returnsA == nil)
 	return _returnsA
 }
 

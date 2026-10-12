@@ -8,10 +8,10 @@ import type {ClientLicense} from '@mattermost/types/config';
 
 import ContactUsButton from 'components/announcement_bar/contact_sales/contact_us';
 import useOpenSalesLink from 'components/common/hooks/useOpenSalesLink';
-import SetupSystemSvg from 'components/common/svg_images_components/setup_system';
+import SetupSystemSvg from 'components/common/svg_images_components/setup_system_svg';
 import ExternalLink from 'components/external_link';
 
-import {LicenseSkus} from 'utils/constants';
+import {LicenseSkus, LicenseLinks} from 'utils/constants';
 
 export interface EnterpriseEditionProps {
     isTrialLicense: boolean;
@@ -49,28 +49,28 @@ const EnterpriseEditionRightPanel = ({
 
     const enterpriseToAdvancedAdvantages = [
         intl.formatMessage({
-            id: 'admin.license.enterpriseToAdvancedAdvantage.attributeBasedAccess',
-            defaultMessage: 'Attribute-based access control',
+            id: 'admin.license.enterpriseToAdvancedAdvantage.dynamicAttributeBasedAccessControls',
+            defaultMessage: 'Dynamic attribute-based access controls',
         }),
         intl.formatMessage({
-            id: 'admin.license.enterpriseToAdvancedAdvantage.channelWarningBanners',
-            defaultMessage: 'Channel warning banners',
+            id: 'admin.license.enterpriseToAdvancedAdvantage.dataSpillageHandling',
+            defaultMessage: 'Data spillage handling',
         }),
         intl.formatMessage({
-            id: 'admin.license.enterpriseToAdvancedAdvantage.adLdapGroupSync',
-            defaultMessage: 'AD/LDAP group sync',
+            id: 'admin.license.enterpriseToAdvancedAdvantage.burnOnReadMessages',
+            defaultMessage: 'Burn-on-read messages',
         }),
         intl.formatMessage({
-            id: 'admin.license.enterpriseToAdvancedAdvantage.advancedWorkflows',
-            defaultMessage: 'Advanced workflows with Playbooks',
+            id: 'admin.license.enterpriseToAdvancedAdvantage.mobileBiometricsAndAdvancedSecurity',
+            defaultMessage: 'Mobile biometrics & advanced security',
         }),
         intl.formatMessage({
-            id: 'admin.license.enterpriseToAdvancedAdvantage.highAvailability',
-            defaultMessage: 'High availability',
+            id: 'admin.license.enterpriseToAdvancedAdvantage.automaticChannelTranslations',
+            defaultMessage: 'Automatic channel translations',
         }),
         intl.formatMessage({
-            id: 'admin.license.enterpriseToAdvancedAdvantage.advancedCompliance',
-            defaultMessage: 'Advanced compliance',
+            id: 'admin.license.enterpriseToAdvancedAdvantage.channelBanners',
+            defaultMessage: 'Channel banners',
         }),
         intl.formatMessage({
             id: 'admin.license.upgradeAdvantage.andMore',
@@ -85,9 +85,7 @@ const EnterpriseEditionRightPanel = ({
 
     const contactSalesBtn = (
         <div className='purchase-card'>
-            <ContactUsButton
-                eventID='post_trial_contact_sales'
-            />
+            <ContactUsButton/>
         </div>
     );
 
@@ -167,7 +165,17 @@ const EnterpriseEditionRightPanel = ({
             return (
                 <FormattedMessage
                     id='admin.license.entryPlanSubtitle'
-                    defaultMessage='Purchase a plan to unlock full access, or start a trial to remove limits while you evaluate Enterprise Advanced.'
+                    defaultMessage='Purchase a plan to unlock full access, or <link>start a trial</link> to remove limits while you evaluate Enterprise Advanced.'
+                    values={{
+                        link: (msg: React.ReactNode) => (
+                            <ExternalLink
+                                location='entry_trial_license'
+                                href={LicenseLinks.TRIAL_INFO_LINK}
+                            >
+                                {msg}
+                            </ExternalLink>
+                        ),
+                    }}
                 />
             );
         }
@@ -218,19 +226,9 @@ const EnterpriseEditionRightPanel = ({
                     >
                         <FormattedMessage
                             id='admin.license.contactSales'
-                            defaultMessage='Contact sales'
+                            defaultMessage='Questions? Contact sales'
                         />
                     </button>
-                    <ExternalLink
-                        href='https://mattermost.com/trial'
-                        location='enterprise_edition_right_panel_entry_trial'
-                        className='btn btn-tertiary trial-btn'
-                    >
-                        <FormattedMessage
-                            id='admin.license.getFreeTrial'
-                            defaultMessage='Get a free 30-day trial license'
-                        />
-                    </ExternalLink>
                 </div>
             </div>
         );

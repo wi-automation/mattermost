@@ -15,11 +15,13 @@ const (
 	SystemLastComplianceTime               = "LastComplianceTime"
 	SystemAsymmetricSigningKeyKey          = "AsymmetricSigningKey"
 	SystemPostActionCookieSecretKey        = "PostActionCookieSecret"
+	SystemSamlRelayStateSigningKeyKey      = "SamlRelayStateSigningKey"
 	SystemInstallationDateKey              = "InstallationDate"
 	SystemOrganizationName                 = "OrganizationName"
 	SystemFirstAdminRole                   = "FirstAdminRole"
 	SystemFirstServerRunTimestampKey       = "FirstServerRunTimestamp"
 	SystemClusterEncryptionKey             = "ClusterEncryptionKey"
+	SystemPushProxyAuthToken               = "PushProxyAuthToken"
 	SystemUpgradedFromTeId                 = "UpgradedFromTE"
 	SystemWarnMetricNumberOfTeams5         = "warn_metric_number_of_teams_5"
 	SystemWarnMetricNumberOfChannels50     = "warn_metric_number_of_channels_50"
@@ -36,6 +38,7 @@ const (
 	SystemLastAccessiblePostTime           = "LastAccessiblePostTime"
 	SystemLastAccessibleFileTime           = "LastAccessibleFileTime"
 	SystemHostedPurchaseNeedsScreening     = "HostedPurchaseNeedsScreening"
+	SystemPostChannelTypeBackfillComplete  = "PostChannelTypeBackfillComplete"
 	AwsMeteringReportInterval              = 1
 	AwsMeteringDimensionUsageHrs           = "UsageHrs"
 	CloudRenewalEmail                      = "CloudRenewalEmail"
@@ -57,6 +60,10 @@ type System struct {
 }
 
 type SystemPostActionCookieSecret struct {
+	Secret []byte `json:"key,omitempty"`
+}
+
+type SystemSamlRelayStateSigningKey struct {
 	Secret []byte `json:"key,omitempty"`
 }
 

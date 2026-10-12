@@ -4,7 +4,7 @@
 import React from 'react';
 import {FormattedMessage} from 'react-intl';
 
-import type {AppField, AppFormValue, AppSelectOption} from '@mattermost/types/apps';
+import {isAppSelectOption, type AppField, type AppFormValue, type AppSelectOption} from '@mattermost/types/apps';
 import type {UserAutocomplete} from '@mattermost/types/autocomplete';
 import type {Channel} from '@mattermost/types/channels';
 
@@ -21,6 +21,9 @@ import type {InputTypes} from 'components/widgets/settings/text_setting';
 
 import AppsFormSelectField from './apps_form_select_field';
 
+import AppsFormDateField from '../apps_form_date_field';
+import AppsFormDateTimeField from '../apps_form_datetime_field';
+
 const TEXT_DEFAULT_MAX_LENGTH = 150;
 const TEXTAREA_DEFAULT_MAX_LENGTH = 3000;
 
@@ -32,6 +35,7 @@ export interface Props {
 
     value: AppFormValue;
     onChange: (name: string, value: any) => void;
+    setIsInteracting?: (isInteracting: boolean) => void;
     autoFocus?: boolean;
     listComponent?: React.ComponentProps<typeof AutocompleteSelector>['listComponent'];
     performLookup: (name: string, userInput: string) => Promise<AppSelectOption[]>;
@@ -172,7 +176,9 @@ export default class AppsFormField extends React.PureComponent<Props> {
             );
         }
         case AppFieldTypes.RADIO: {
-            const radioValue = value as string;
+            // Radio values may be stored as AppSelectOption objects (from initial default)
+            // or plain strings (after user interaction via RadioSetting.onChange)
+            const radioValue = isAppSelectOption(value) ? value.value : (value as string) ?? '';
             return (
                 <RadioSetting
                     id={name}
@@ -189,6 +195,50 @@ export default class AppsFormField extends React.PureComponent<Props> {
                 <Markdown
                     message={field.description}
                 />
+            );
+        }
+        case AppFieldTypes.DATE: {
+            return (
+                <div className='form-group'>
+                    {field.label && (
+                        <label className='control-label'>
+                            {displayNameContent}
+                        </label>
+                    )}
+                    <AppsFormDateField
+                        field={field}
+                        value={value as string | null}
+                        onChange={onChange}
+                        setIsInteracting={this.props.setIsInteracting}
+                    />
+                    {helpTextContent && (
+                        <div className='help-text'>
+                            {helpTextContent}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+        case AppFieldTypes.DATETIME: {
+            return (
+                <div className='form-group'>
+                    {field.label && (
+                        <label className='control-label'>
+                            {displayNameContent}
+                        </label>
+                    )}
+                    <AppsFormDateTimeField
+                        field={field}
+                        value={value as string | null}
+                        onChange={onChange}
+                        setIsInteracting={this.props.setIsInteracting}
+                    />
+                    {helpTextContent && (
+                        <div className='help-text'>
+                            {helpTextContent}
+                        </div>
+                    )}
+                </div>
             );
         }
         }

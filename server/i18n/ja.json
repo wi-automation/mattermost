@@ -73,7 +73,7 @@
   },
   {
     "id": "api.admin.remove_certificate.delete.app_error",
-    "translation": "OAuth2アプリケーションを削除中にエラーが発生しました。"
+    "translation": "証明書を削除中にエラーが発生しました。"
   },
   {
     "id": "api.admin.saml.metadata.app_error",
@@ -788,10 +788,6 @@
     "translation": "指定したチャンネルが見つかりませんでした。チャンネルの指定には[チャンネルのハンドル名](https://docs.mattermost.com/messaging/managing-channels.html#naming-a-channel)を使用してください。"
   },
   {
-    "id": "api.command_mute.not_member.error",
-    "translation": "あなたはメンバーではないため、チャンネル {{.Channel}} をミュートできません。"
-  },
-  {
     "id": "api.command_mute.success_mute",
     "translation": "チャンネルミュートがオフになるまで {{.Channel}} の通知を受け取らなくなります。"
   },
@@ -1182,10 +1178,6 @@
     "translation": "不正なリクエスト: client_idが不正です。"
   },
   {
-    "id": "api.oauth.get_access_token.bad_client_secret.app_error",
-    "translation": "不正なリクエスト: client_secretが存在しません。"
-  },
-  {
     "id": "api.oauth.get_access_token.bad_grant.app_error",
     "translation": "不正なリクエスト: grant_typeが不正です。"
   },
@@ -1482,10 +1474,6 @@
     "translation": "サーバー開始時にエラーになりました err:%v"
   },
   {
-    "id": "api.slackimport.slack_add_bot_user.email_pwd",
-    "translation": "電子メールアドレス {{.Email}} と パスワード {{.Password}} を持つ 統合機能/SlackBot のユーザーがインポートされました。\r\n"
-  },
-  {
     "id": "api.slackimport.slack_add_bot_user.unable_import",
     "translation": "統合機能/SlackBot のユーザー {{.Username}} がインポートできませんでした。\r\n"
   },
@@ -1508,10 +1496,6 @@
   {
     "id": "api.slackimport.slack_add_users.created",
     "translation": "\r\n ユーザーが作成されました:\r\n"
-  },
-  {
-    "id": "api.slackimport.slack_add_users.email_pwd",
-    "translation": "電子メールアドレス {{.Email}} とパスワード {{.Password}} を持つSlackがインポートされました。\r\n"
   },
   {
     "id": "api.slackimport.slack_add_users.merge_existing",
@@ -5230,10 +5214,6 @@
     "translation": "Mattermostエンタープライズライセンスは無効になっています。"
   },
   {
-    "id": "api.templates.remove_expired_license.body.title",
-    "translation": "エンタープライズエディションのライセンスの有効期限が切れ、一部の機能が無効になることがあります。今すぐライセンスを更新してください。"
-  },
-  {
     "id": "api.templates.invite_guest_subject",
     "translation": "[{{ .SiteName }}] {{ .SenderName }} がゲストとしてあなたを {{ .TeamDisplayName }} チームに招待しました"
   },
@@ -8562,10 +8542,6 @@
     "translation": "{{.Backend}} のCAファイルを開くことができませんでした"
   },
   {
-    "id": "api.server.cws.health_check.app_error",
-    "translation": "CWSサーバーは使用できません。"
-  },
-  {
     "id": "app.group.username_conflict",
     "translation": "ユーザー名 \"{{.Username}}\" のユーザーは既に存在します。"
   },
@@ -8604,10 +8580,6 @@
   {
     "id": "app.plugin.skip_installation.app_error",
     "translation": "プラグイン {{.Id}} は、既存のバージョンと同じかより新しいため、インストールをスキップします。"
-  },
-  {
-    "id": "api.server.cws.subscribe_to_newsletter.app_error",
-    "translation": "CWSサーバーがニュースレターを購読できませんでした。"
   },
   {
     "id": "api.license.request-trial.bad-request.business-email",
@@ -10034,10 +10006,6 @@
     "translation": "カスタム絵文字の画像用のディレクトリを作成できませんでした"
   },
   {
-    "id": "app.import.validate_user_import_data.guest_roles_conflict.error",
-    "translation": "ユーザーロールがゲストのステータスと一致していません。"
-  },
-  {
     "id": "app.custom_profile_attributes.cpa_group_id.app_error",
     "translation": "カスタムプロフィール属性のプロパティグループを登録できません"
   },
@@ -10048,10 +10016,6 @@
   {
     "id": "app.custom_profile_attributes.property_field_delete.app_error",
     "translation": "カスタムプロフィール属性のフィールドを削除できませんでした"
-  },
-  {
-    "id": "app.custom_profile_attributes.create_property_field.app_error",
-    "translation": "カスタムプロフィール属性のフィールドを作成できませんでした"
   },
   {
     "id": "app.custom_profile_attributes.get_property_field.app_error",
@@ -10442,24 +10406,12 @@
     "translation": "アクセス制御サービスの準備ができていません。"
   },
   {
-    "id": "app.pap.update_access_control_policy_active.app_error",
-    "translation": "アクセス制御ポリシーの有効化状況を変更できませんでした。"
-  },
-  {
     "id": "app.pdp.access_evaluation.app_error",
     "translation": "アクセス制御ポリシーを評価できませんでした。"
   },
   {
     "id": "model.config.is_valid.directory_whitespace.app_error",
     "translation": "{{.Setting}}の先頭または末尾に空白が検出されました。\"{{.Value}}\"が見つかりました。"
-  },
-  {
-    "id": "model.config.is_valid.experimental_audit_settings.file_max_queue_size_invalid",
-    "translation": "監査ログ設定の最大ファイルキューは0より大きい値でなくてはなりません。"
-  },
-  {
-    "id": "model.config.is_valid.experimental_audit_settings.file_max_size_invalid",
-    "translation": "監査ログ設定の最大ファイルサイズは0より大きな値でなくてはなりません。"
   },
   {
     "id": "model.config.is_valid.experimental_audit_settings.file_name_empty",
@@ -10682,14 +10634,6 @@
     "translation": "チャンネルバナーの色は有効な16新数カラーでなくてはなりません(例, #FF0000 または #F00)"
   },
   {
-    "id": "model.config.is_valid.experimental_audit_settings.file_max_age_invalid",
-    "translation": "監査ログ設定の最長ファイル保持日数は負の値であってはなりません。"
-  },
-  {
-    "id": "model.config.is_valid.experimental_audit_settings.file_max_backups_invalid",
-    "translation": "監査ログ設定の最大ファイルバックアップ数は負の値であってはなりません。"
-  },
-  {
     "id": "api.team.invite_guests.policy_enforced_channel.app_error",
     "translation": "ユーザー属性に基づくアクセス制限が設定されているため、このチャンネルにゲストユーザーは招待できません。"
   },
@@ -10700,18 +10644,6 @@
   {
     "id": "api.command_share.service_inactive",
     "translation": "チャンネル共有サービスが有効ですが、アクティブではありません。"
-  },
-  {
-    "id": "api.content_flagging.error.disabled",
-    "translation": "コンテントフラグ機能が無効です。"
-  },
-  {
-    "id": "api.content_flagging.error.license",
-    "translation": "あなたのライセンスはコンテントフラグをサポートしていません。"
-  },
-  {
-    "id": "api.not_implemented",
-    "translation": "この機能は実装されていません。"
   },
   {
     "id": "app.access_control.insufficient_permissions",
@@ -10772,5 +10704,81 @@
   {
     "id": "model.config.is_valid.experimental_view_archived_channels.app_error",
     "translation": "アーカイブ済みチャンネルを非表示にする機能はサポートされていません。これらのチャンネルを非公開にするか、メンバーを削除してください。"
+  },
+  {
+    "id": "api.user.check_user_password.invalid_hash.app_error",
+    "translation": "ハッシュ化されたパスワードのフォーマットが無効であるため解析できません。"
+  },
+  {
+    "id": "app.user.check_user_password.failed_migration",
+    "translation": "ユーザーのパスワードを最新のハッシュメソッドに移行するのに失敗しました。"
+  },
+  {
+    "id": "app.user.check_user_password.failed_update",
+    "translation": "ユーザーのパスワードの更新に失敗しました。"
+  },
+  {
+    "id": "api.channel.patch_update_channel.restricted_dm.app_error",
+    "translation": "制限されたダイレクトメッセージチャンネルを更新できません。"
+  },
+  {
+    "id": "api.command.execute_command.restricted_dm.error",
+    "translation": "制限されたDMには投稿できません"
+  },
+  {
+    "id": "api.draft.create_draft.can_not_draft_to_restricted_dm.error",
+    "translation": "制限されたダイレクトメッセージチャンネルには下書きを保存できません"
+  },
+  {
+    "id": "api.file.upload_file.get_channel.app_error",
+    "translation": "制限されたDMにはファイルをアップロードできません"
+  },
+  {
+    "id": "api.file.upload_file.restricted_dm.error",
+    "translation": "制限されたDMにはファイルをアップロードできません"
+  },
+  {
+    "id": "api.post.create_post.can_not_post_in_restricted_dm.error",
+    "translation": "制限されたダイレクトメッセージチャンネルには投稿できません。"
+  },
+  {
+    "id": "api.post.delete_post.can_not_delete_from_restricted_dm.error",
+    "translation": "制限されたダイレクトメッセージチャンネルの投稿は削除できません。"
+  },
+  {
+    "id": "api.post.patch_post.can_not_update_post_in_restricted_dm.error",
+    "translation": "制限されたダイレクトメッセージチャンネルの投稿は更新できません。"
+  },
+  {
+    "id": "api.post.update_post.can_not_update_post_in_restricted_dm.error",
+    "translation": "制限されたダイレクトメッセージチャンネルの投稿は更新できません。"
+  },
+  {
+    "id": "api.reaction.delete.restricted_dm.error",
+    "translation": "制限されたDM内ではリアクションできません"
+  },
+  {
+    "id": "api.reaction.save.restricted_dm.error",
+    "translation": "制限されたDM内ではリアクションできません"
+  },
+  {
+    "id": "app.job.get_existing_jobs.error",
+    "translation": "既存のジョブを取得できませんでした。"
+  },
+  {
+    "id": "app.post_priority.delete_for_post.app_error",
+    "translation": "投稿に対するデータベースから投稿の優先度に関するデータを完全に削除できませんでした。"
+  },
+  {
+    "id": "app.save_scheduled_post.restricted_dm.error",
+    "translation": "制限されたDM内でスケジュール済み投稿はできません"
+  },
+  {
+    "id": "app.submit_interactive_dialog.invalid_response",
+    "translation": "インタラクティブダイアログの送信で不正なレスポンスが検出されました。"
+  },
+  {
+    "id": "app.upload.create.cannot_upload_to_restricted_dm.error",
+    "translation": "制限されたダイレクトメッセージにファイルをアップロードできません。"
   }
 ]

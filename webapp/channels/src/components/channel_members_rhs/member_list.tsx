@@ -26,10 +26,10 @@ export enum ListItemType {
     Separator = 'separator',
 }
 
-export interface ListItem {
+export type ListItem = {
     type: ListItemType;
     data: ChannelMember | JSX.Element;
-}
+};
 export interface Props {
     channel: Channel;
     members: ListItem[];
@@ -38,7 +38,7 @@ export interface Props {
     isNextPageLoading: boolean;
     searchTerms: string;
     openDirectMessage: (user: UserProfile) => void;
-    fetchRemoteClusterInfo: (remoteId: string, forceRefresh?: boolean) => void;
+    fetchRemoteClusterInfo: (remoteId: string, includeDeleted?: boolean, forceRefresh?: boolean) => void;
     loadMore: () => void;
 }
 
@@ -120,7 +120,7 @@ const MemberList = ({
                         key={index}
                         style={style}
                     >
-                        {members[index].data}
+                        {members[index].data as JSX.Element}
                     </div>
                 );
             default:

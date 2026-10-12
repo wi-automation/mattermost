@@ -55,6 +55,7 @@ type Params struct {
 	Service                            string
 	JobId                              string
 	JobType                            string
+	RecapId                            string
 	ActionId                           string
 	RoleId                             string
 	RoleName                           string
@@ -109,16 +110,25 @@ type Params struct {
 	ExcludeRemote                      bool
 	AccessControlPolicyEnforced        bool
 	ExcludeAccessControlPolicyEnforced bool
+	ContentReviewerId                  string
 
 	//Bookmarks
 	ChannelBookmarkId string
 	BookmarksSince    int64
+
+	// Views
+	ViewId string
 
 	// Cloud
 	InvoiceId string
 
 	// Custom Profile Attributes
 	FieldId string
+
+	// Properties
+	GroupName  string
+	ObjectType string
+	TargetId   string
 }
 
 var getChannelMembersForUserRegex = regexp.MustCompile("/api/v4/users/[A-Za-z0-9]{26}/channel_members")
@@ -168,6 +178,7 @@ func ParamsFromRequest(r *http.Request) *Params {
 	params.EmojiName = props["emoji_name"]
 	params.JobId = props["job_id"]
 	params.JobType = props["job_type"]
+	params.RecapId = props["recap_id"]
 	params.ActionId = props["action_id"]
 	params.RoleId = props["role_id"]
 	params.RoleName = props["role_name"]
@@ -189,7 +200,11 @@ func ParamsFromRequest(r *http.Request) *Params {
 	params.ExcludeHome, _ = strconv.ParseBool(query.Get("exclude_home"))
 	params.ExcludeRemote, _ = strconv.ParseBool(query.Get("exclude_remote"))
 	params.ChannelBookmarkId = props["bookmark_id"]
+	params.ViewId = props["view_id"]
 	params.FieldId = props["field_id"]
+	params.GroupName = props["group_name"]
+	params.ObjectType = props["object_type"]
+	params.TargetId = props["target_id"]
 	params.Scope = query.Get("scope")
 
 	if val, err := strconv.Atoi(query.Get("page")); err != nil || (val < 0 && params.UserId == "" && !getChannelMembersForUserRegex.MatchString(r.URL.Path)) {
@@ -285,6 +300,7 @@ func ParamsFromRequest(r *http.Request) *Params {
 	params.ExcludePolicyConstrained, _ = strconv.ParseBool(query.Get("exclude_policy_constrained"))
 	params.AccessControlPolicyEnforced, _ = strconv.ParseBool(query.Get("access_control_policy_enforced"))
 	params.ExcludeAccessControlPolicyEnforced, _ = strconv.ParseBool(query.Get("exclude_access_control_policy_enforced"))
+	params.ContentReviewerId = props["content_reviewer_id"]
 
 	if val := query.Get("group_source"); val != "" {
 		switch val {

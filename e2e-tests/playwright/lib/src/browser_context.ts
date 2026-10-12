@@ -2,24 +2,41 @@
 // See LICENSE.txt for license information.
 
 import {writeFile} from 'node:fs/promises';
+import path from 'node:path';
+import fs from 'node:fs';
 
-import {Browser, BrowserContext, request} from '@playwright/test';
+import {Browser, BrowserContext, Page, request} from '@playwright/test';
 import {UserProfile} from '@mattermost/types/users';
 
-import {testConfig} from './test_config';
+import {resolveAppUrl, testConfig} from './test_config';
 import {pages} from './ui/pages';
+import {resolvePlaywrightPath} from './util';
+
+/** Keep page.goto pointed at testConfig.baseURL after testcontainers remaps the host port. */
+export function bindPageToLiveBaseURL(page: Page): void {
+    const originalGoto = page.goto.bind(page);
+    page.goto = ((url, options) => {
+        if (typeof url === 'string') {
+            return originalGoto(resolveAppUrl(url), options);
+        }
+        return originalGoto(url, options);
+    }) as typeof page.goto;
+}
 
 export class TestBrowser {
     readonly browser: Browser;
-    context: BrowserContext | null;
+    private contexts: BrowserContext[] = [];
 
     constructor(browser: Browser) {
         this.browser = browser;
-        this.context = null;
     }
 
     async login(user: UserProfile) {
-        const options = {storageState: ''};
+        const options: {storageState: string; baseURL: string} = {
+            storageState: '',
+            // Capture the current mapped URL at context creation (updated after server restarts).
+            baseURL: testConfig.baseURL,
+        };
         if (user) {
             // Log in via API request and save user storage
             const storagePath = await loginByAPI(user.username, user.password);
@@ -28,24 +45,66 @@ export class TestBrowser {
 
         // Sign in a user in new browser context
         const context = await this.browser.newContext(options);
+        await routeInternalBaseUrlToHost(context);
         const page = await context.newPage();
+        bindPageToLiveBaseURL(page);
 
         const channelsPage = new pages.ChannelsPage(page);
         const systemConsolePage = new pages.SystemConsolePage(page);
         const scheduledPostsPage = new pages.ScheduledPostsPage(page);
         const draftsPage = new pages.DraftsPage(page);
+        const recapsPage = new pages.RecapsPage(page);
         const threadsPage = new pages.ThreadsPage(page);
+        const contentReviewPage = new pages.ContentReviewPage(page);
 
-        this.context = context;
+        this.contexts.push(context);
 
-        return {context, page, channelsPage, systemConsolePage, scheduledPostsPage, draftsPage, threadsPage};
+        return {
+            context,
+            page,
+            channelsPage,
+            systemConsolePage,
+            scheduledPostsPage,
+            draftsPage,
+            recapsPage,
+            threadsPage,
+            contentReviewPage,
+        };
+    }
+
+    /**
+     * Switch the auth state of an existing context to a different user
+     * without creating a new context. After switching, pages in the context
+     * should be reloaded to pick up the new auth state.
+     */
+    async switchUser(context: BrowserContext, user: UserProfile) {
+        const storagePath = await loginByAPI(user.username, user.password);
+        await context.setStorageState(storagePath);
     }
 
     async close() {
-        if (this.context) {
-            await this.context.close();
+        for (const context of this.contexts) {
+            await context.close();
         }
+        this.contexts = [];
     }
+}
+
+/**
+ * Plugin webapp bundles build absolute URLs from ServiceSettings.SiteURL, which in `testcontainers`
+ * mode is a Docker network alias that only other containers can resolve. Left alone those fetches
+ * hang from the host browser, so anything waiting on network idle never settles. Rewrite them onto
+ * the host-mapped URL, which serves the same server. No-op in `external` mode, where the two match.
+ */
+async function routeInternalBaseUrlToHost(context: BrowserContext) {
+    const {internalBaseURL, baseURL} = testConfig;
+    if (internalBaseURL === baseURL) {
+        return;
+    }
+
+    await context.route(`${internalBaseURL}/**`, async (route) => {
+        await route.continue({url: route.request().url().replace(internalBaseURL, baseURL)});
+    });
 }
 
 export async function loginByAPI(loginId: string, password: string, token = '', ldapOnly = false) {
@@ -69,9 +128,15 @@ export async function loginByAPI(loginId: string, password: string, token = '', 
     });
 
     // Save signed-in state to a folder
-    const storagePath = `storage_state/${Date.now()}_${loginId}_${password}${token ? '_' + token : ''}${
-        ldapOnly ? '_ldap' : ''
-    }.json`;
+    const storageStateDir = resolvePlaywrightPath('storage_state');
+
+    // Ensure storage_state directory exists
+    if (!fs.existsSync(storageStateDir)) {
+        fs.mkdirSync(storageStateDir, {recursive: true});
+    }
+
+    const filename = `${Date.now()}_${loginId}_${password}${token ? '_' + token : ''}${ldapOnly ? '_ldap' : ''}.json`;
+    const storagePath = path.join(storageStateDir, filename);
     const storageState = await requestContext.storageState({path: storagePath});
     await requestContext.dispose();
 

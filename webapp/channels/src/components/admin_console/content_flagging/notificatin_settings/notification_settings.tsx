@@ -8,7 +8,7 @@ import type {ContentFlaggingNotificationSettings} from '@mattermost/types/config
 import type {ContentFlaggingEvent, NotificationTarget} from '@mattermost/types/content_flagging';
 
 import CheckboxSetting from 'components/admin_console/checkbox_setting';
-import type {SystemConsoleCustomSettingsComponentProps} from 'components/admin_console/schema_admin_settings';
+import type {SystemConsoleCustomSettingChangeHandler} from 'components/admin_console/schema_admin_settings';
 import {
     AdminSection,
     SectionContent,
@@ -17,7 +17,14 @@ import {
 
 import '../content_flagging_section_base.scss';
 
-export default function ContentFlaggingNotificationSettingsSection({id, value, onChange}: SystemConsoleCustomSettingsComponentProps) {
+type Props = {
+    id: string;
+    onChange: SystemConsoleCustomSettingChangeHandler;
+    value: ContentFlaggingNotificationSettings;
+    disabled?: boolean;
+}
+
+export default function ContentFlaggingNotificationSettingsSection({id, value, onChange, disabled}: Props) {
     const [notificationSettings, setNotificationSettings] = useState<ContentFlaggingNotificationSettings>(value as ContentFlaggingNotificationSettings);
 
     const handleChange = useCallback((inputId: string, value: boolean) => {
@@ -77,14 +84,14 @@ export default function ContentFlaggingNotificationSettingsSection({id, value, o
                 <hgroup>
                     <h1 className='content-flagging-section-title'>
                         <FormattedMessage
-                            id='admin.contentFlagging.notificationSettings.title'
+                            id='admin.dataSpillage.notificationSettings.title'
                             defaultMessage='Notification Settings'
                         />
                     </h1>
                     <h5 className='content-flagging-section-description'>
                         <FormattedMessage
-                            id='admin.contentFlagging.notificationSettings.description'
-                            defaultMessage='Choose who receives notifications from the System bot when content is flagged and reviewed'
+                            id='admin.dataSpillage.notificationSettings.description'
+                            defaultMessage='Choose who receives notifications from the System bot when content is quarantined and reviewed'
                         />
                     </h5>
                 </hgroup>
@@ -96,8 +103,8 @@ export default function ContentFlaggingNotificationSettingsSection({id, value, o
                     <div className='content-flagging-section-setting'>
                         <div className='setting-title'>
                             <FormattedMessage
-                                id='admin.contentFlagging.notificationSettings.notifyOnFlag'
-                                defaultMessage='Notify when content is flagged'
+                                id='admin.dataSpillage.notificationSettings.notifyOnFlag'
+                                defaultMessage='Notify when content is quarantined'
                             />
                         </div>
 
@@ -106,7 +113,7 @@ export default function ContentFlaggingNotificationSettingsSection({id, value, o
                                 id='flagged_reviewers'
                                 label={
                                     <FormattedMessage
-                                        id='admin.contentFlagging.notificationSettings.reviewers'
+                                        id='admin.dataSpillage.notificationSettings.reviewers'
                                         defaultMessage='Reviewer(s)'
                                     />
                                 }
@@ -117,16 +124,17 @@ export default function ContentFlaggingNotificationSettingsSection({id, value, o
                             />
 
                             <CheckboxSetting
-                                id='flagged_authors'
+                                id='flagged_author'
                                 label={
                                     <FormattedMessage
-                                        id='admin.contentFlagging.notificationSettings.author'
+                                        id='admin.dataSpillage.notificationSettings.author'
                                         defaultMessage='Author'
                                     />
                                 }
                                 defaultChecked={getValue('flagged', 'author')}
                                 onChange={handleChange}
                                 setByEnv={false}
+                                disabled={disabled}
                             />
                         </div>
                     </div>
@@ -135,7 +143,7 @@ export default function ContentFlaggingNotificationSettingsSection({id, value, o
                     <div className='content-flagging-section-setting'>
                         <div className='setting-title'>
                             <FormattedMessage
-                                id='admin.contentFlagging.notificationSettings.notifyOnReviewerAssigned'
+                                id='admin.dataSpillage.notificationSettings.notifyOnReviewerAssigned'
                                 defaultMessage='Notify when a reviewer is assigned'
                             />
                         </div>
@@ -145,13 +153,14 @@ export default function ContentFlaggingNotificationSettingsSection({id, value, o
                                 id='assigned_reviewers'
                                 label={
                                     <FormattedMessage
-                                        id='admin.contentFlagging.notificationSettings.reviewers'
+                                        id='admin.dataSpillage.notificationSettings.reviewers'
                                         defaultMessage='Reviewer(s)'
                                     />
                                 }
                                 defaultChecked={getValue('assigned', 'reviewers')}
                                 onChange={handleChange}
                                 setByEnv={false}
+                                disabled={disabled}
                             />
                         </div>
                     </div>
@@ -160,7 +169,7 @@ export default function ContentFlaggingNotificationSettingsSection({id, value, o
                     <div className='content-flagging-section-setting'>
                         <div className='setting-title'>
                             <FormattedMessage
-                                id='admin.contentFlagging.notificationSettings.notifyOnRemoval'
+                                id='admin.dataSpillage.notificationSettings.notifyOnRemoval'
                                 defaultMessage='Notify when content is removed'
                             />
                         </div>
@@ -170,39 +179,42 @@ export default function ContentFlaggingNotificationSettingsSection({id, value, o
                                 id='removed_reviewers'
                                 label={
                                     <FormattedMessage
-                                        id='admin.contentFlagging.notificationSettings.reviewers'
+                                        id='admin.dataSpillage.notificationSettings.reviewers'
                                         defaultMessage='Reviewer(s)'
                                     />
                                 }
                                 defaultChecked={getValue('removed', 'reviewers')}
                                 onChange={handleChange}
                                 setByEnv={false}
+                                disabled={disabled}
                             />
 
                             <CheckboxSetting
                                 id='removed_author'
                                 label={
                                     <FormattedMessage
-                                        id='admin.contentFlagging.notificationSettings.author'
+                                        id='admin.dataSpillage.notificationSettings.author'
                                         defaultMessage='Author'
                                     />
                                 }
                                 defaultChecked={getValue('removed', 'author')}
                                 onChange={handleChange}
                                 setByEnv={false}
+                                disabled={disabled}
                             />
 
                             <CheckboxSetting
                                 id='removed_reporter'
                                 label={
                                     <FormattedMessage
-                                        id='admin.contentFlagging.notificationSettings.reporter'
+                                        id='admin.dataSpillage.notificationSettings.reporter'
                                         defaultMessage='Reporter'
                                     />
                                 }
                                 defaultChecked={getValue('removed', 'reporter')}
                                 onChange={handleChange}
                                 setByEnv={false}
+                                disabled={disabled}
                             />
                         </div>
                     </div>
@@ -211,8 +223,8 @@ export default function ContentFlaggingNotificationSettingsSection({id, value, o
                     <div className='content-flagging-section-setting'>
                         <div className='setting-title'>
                             <FormattedMessage
-                                id='admin.contentFlagging.notificationSettings.notifyOnDismissal'
-                                defaultMessage='Notify when flag is dismissed'
+                                id='admin.dataSpillage.notificationSettings.notifyOnDismissal'
+                                defaultMessage='Notify when quarantine is dismissed'
                             />
                         </div>
 
@@ -221,39 +233,42 @@ export default function ContentFlaggingNotificationSettingsSection({id, value, o
                                 id='dismissed_reviewers'
                                 label={
                                     <FormattedMessage
-                                        id='admin.contentFlagging.notificationSettings.reviewers'
+                                        id='admin.dataSpillage.notificationSettings.reviewers'
                                         defaultMessage='Reviewer(s)'
                                     />
                                 }
                                 defaultChecked={getValue('dismissed', 'reviewers')}
                                 onChange={handleChange}
                                 setByEnv={false}
+                                disabled={disabled}
                             />
 
                             <CheckboxSetting
                                 id='dismissed_author'
                                 label={
                                     <FormattedMessage
-                                        id='admin.contentFlagging.notificationSettings.author'
+                                        id='admin.dataSpillage.notificationSettings.author'
                                         defaultMessage='Author'
                                     />
                                 }
                                 defaultChecked={getValue('dismissed', 'author')}
                                 onChange={handleChange}
                                 setByEnv={false}
+                                disabled={disabled}
                             />
 
                             <CheckboxSetting
                                 id='dismissed_reporter'
                                 label={
                                     <FormattedMessage
-                                        id='admin.contentFlagging.notificationSettings.reporter'
+                                        id='admin.dataSpillage.notificationSettings.reporter'
                                         defaultMessage='Reporter'
                                     />
                                 }
                                 defaultChecked={getValue('dismissed', 'reporter')}
                                 onChange={handleChange}
                                 setByEnv={false}
+                                disabled={disabled}
                             />
                         </div>
                     </div>

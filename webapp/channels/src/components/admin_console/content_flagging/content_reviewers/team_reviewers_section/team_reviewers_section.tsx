@@ -25,9 +25,10 @@ const GET_TEAMS_PAGE_SIZE = 10;
 type Props = {
     teamReviewersSetting: Record<string, TeamReviewerSetting>;
     onChange: (updatedTeamSettings: Record<string, TeamReviewerSetting>) => void;
+    disabled?: boolean;
 }
 
-export default function TeamReviewers({teamReviewersSetting, onChange}: Props): JSX.Element {
+export default function TeamReviewers({teamReviewersSetting, onChange, disabled}: Props): JSX.Element {
     const intl = useIntl();
     const dispatch = useDispatch();
 
@@ -103,17 +104,17 @@ export default function TeamReviewers({teamReviewersSetting, onChange}: Props): 
     const columns = useMemo(() => {
         return [
             {
-                name: intl.formatMessage({id: 'admin.contentFlagging.reviewerSettings.header.team', defaultMessage: 'Team'}),
+                name: intl.formatMessage({id: 'admin.dataSpillage.reviewerSettings.header.team', defaultMessage: 'Team'}),
                 field: 'team',
                 fixed: true,
             },
             {
-                name: intl.formatMessage({id: 'admin.contentFlagging.reviewerSettings.header.reviewers', defaultMessage: 'Reviewers'}),
+                name: intl.formatMessage({id: 'admin.dataSpillage.reviewerSettings.header.reviewers', defaultMessage: 'Reviewers'}),
                 field: 'reviewers',
                 fixed: true,
             },
             {
-                name: intl.formatMessage({id: 'admin.contentFlagging.reviewerSettings.header.enabled', defaultMessage: 'Enabled'}),
+                name: intl.formatMessage({id: 'admin.dataSpillage.reviewerSettings.header.enabled', defaultMessage: 'Enabled'}),
                 field: 'enabled',
                 fixed: true,
             },
@@ -146,20 +147,22 @@ export default function TeamReviewers({teamReviewersSetting, onChange}: Props): 
                         id={`team_content_reviewer_${team.id}`}
                         multiSelectInitialValue={teamReviewersSetting[team.id]?.ReviewerIds || []}
                         multiSelectOnChange={getHandleReviewersChange(team.id)}
+                        disabled={disabled}
                     />
                 ),
                 enabled: (
                     <Toggle
                         id={`team_content_reviewer_toggle_${team.id}`}
-                        ariaLabel={intl.formatMessage({id: 'admin.contentFlagging.reviewerSettings.toggle', defaultMessage: 'Enable or disable content reviewers for this team'})}
+                        ariaLabel={intl.formatMessage({id: 'admin.dataSpillage.reviewerSettings.toggle', defaultMessage: 'Enable or disable content reviewers for this team'})}
                         size='btn-md'
                         onToggle={getHandleToggle(team.id)}
                         toggled={teamReviewersSetting[team.id]?.Enabled || false}
+                        disabled={disabled}
                     />
                 ),
             },
         }));
-    }, [getHandleReviewersChange, getHandleToggle, intl, teamReviewersSetting, teams]);
+    }, [disabled, getHandleReviewersChange, getHandleToggle, intl, teamReviewersSetting, teams]);
 
     const nextPage = useCallback(() => {
         if ((page * GET_TEAMS_PAGE_SIZE) + GET_TEAMS_PAGE_SIZE < total) {
@@ -178,24 +181,39 @@ export default function TeamReviewers({teamReviewersSetting, onChange}: Props): 
         setPage(0); // Reset to first page on new search
     }, []);
 
+    const handleDisableForAllTeams = useCallback(() => {
+        const updatedTeamSettings: Record<string, TeamReviewerSetting> = {};
+
+        Object.entries(teamReviewersSetting).forEach(([teamId, teamSettings]) => {
+            updatedTeamSettings[teamId] = {
+                ...teamSettings,
+                Enabled: false,
+            };
+        });
+
+        onChange(updatedTeamSettings);
+    }, [onChange, teamReviewersSetting]);
+
     const disableAllBtn = useMemo(() => (
         <div className='TeamReviewers__disable-all'>
             <button
-                data-testid='copyText'
+                data-testid='disableForAllTeamsButton'
                 className='btn btn-link icon-close'
-                aria-label={intl.formatMessage({id: 'admin.contentFlagging.reviewerSettings.disableAll', defaultMessage: 'Disable for all teams'})}
+                aria-label={intl.formatMessage({id: 'admin.dataSpillage.reviewerSettings.disableAll', defaultMessage: 'Disable for all teams'})}
+                disabled={disabled}
+                aria-disabled={disabled}
+                onClick={handleDisableForAllTeams}
             >
-                {intl.formatMessage({id: 'admin.contentFlagging.reviewerSettings.disableAll', defaultMessage: 'Disable for all teams'})}
+                {intl.formatMessage({id: 'admin.dataSpillage.reviewerSettings.disableAll', defaultMessage: 'Disable for all teams'})}
             </button>
         </div>
-    ), [intl]);
+    ), [disabled, intl, handleDisableForAllTeams]);
 
     return (
         <div className='TeamReviewers'>
             <DataGrid
                 rows={rows}
                 columns={columns}
-                page={page}
                 startCount={startCount}
                 endCount={endCount}
                 loading={false}
@@ -205,6 +223,7 @@ export default function TeamReviewers({teamReviewersSetting, onChange}: Props): 
                 onSearch={setSearchTerm}
                 extraComponent={disableAllBtn}
                 term={teamSearchTerm}
+                disabled={disabled}
             />
         </div>
     );

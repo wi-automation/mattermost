@@ -45,7 +45,7 @@ var ConfigSetCmd = &cobra.Command{
 	Use:     "set",
 	Short:   "Set config setting",
 	Long:    "Sets the value of a config setting by its name in dot notation. Accepts multiple values for array settings",
-	Example: "config set SqlSettings.DriverName mysql\nconfig set SqlSettings.DataSourceReplicas \"replica1\" \"replica2\"",
+	Example: "config set SqlSettings.DriverName postgres\nconfig set SqlSettings.DataSourceReplicas \"replica1\" \"replica2\"",
 	Args:    cobra.MinimumNArgs(2),
 	RunE:    withClient(configSetCmdF),
 }
@@ -99,7 +99,7 @@ var ConfigMigrateCmd = &cobra.Command{
 	Use:     "migrate [from_config] [to_config]",
 	Short:   "Migrate existing config between backends",
 	Long:    "Migrate a file-based configuration to (or from) a database-based configuration. Point the Mattermost server at the target configuration to start using it. Note that this command is only available in `--local` mode.",
-	Example: `config migrate path/to/config.json "postgres://mmuser:mostest@localhost:5432/mattermost_test?sslmode=disable&connect_timeout=10"`,
+	Example: `config migrate path/to/config.json "postgres://mmuser:mostest_password@localhost:5432/mattermost_test?sslmode=disable&connect_timeout=10"`,
 	Args:    cobra.ExactArgs(2),
 	RunE:    withClient(configMigrateCmdF),
 }

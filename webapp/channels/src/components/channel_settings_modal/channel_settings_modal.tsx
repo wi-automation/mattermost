@@ -12,18 +12,19 @@ import {GenericModal} from '@mattermost/components';
 import type {Channel} from '@mattermost/types/channels';
 
 import Permissions from 'mattermost-redux/constants/permissions';
-import {selectChannelBannerEnabled} from 'mattermost-redux/selectors/entities/channel_banner';
 import {getChannel} from 'mattermost-redux/selectors/entities/channels';
-import {haveIChannelPermission} from 'mattermost-redux/selectors/entities/roles';
+import {getConfig, getLicense} from 'mattermost-redux/selectors/entities/general';
+import {haveIChannelPermission, haveISystemPermission} from 'mattermost-redux/selectors/entities/roles';
 
 import {
     setShowPreviewOnChannelSettingsHeaderModal,
     setShowPreviewOnChannelSettingsPurposeModal,
 } from 'actions/views/textbox';
-import {isChannelAdminManageABACControlEnabled} from 'selectors/general';
+import {isChannelAccessControlEnabled} from 'selectors/general';
 
 import {focusElement} from 'utils/a11y_utils';
 import Constants from 'utils/constants';
+import {isMinimumEnterpriseAdvancedLicense} from 'utils/license_utils';
 
 import type {GlobalState} from 'types/store';
 
@@ -53,11 +54,28 @@ enum ChannelSettingsTabs {
 
 const SHOW_PANEL_ERROR_STATE_TAB_SWITCH_TIMEOUT = 3000;
 
+function getFirstVisibleTab(shouldShowInfoTab: boolean, shouldShowAccessRulesTab: boolean, shouldShowConfigurationTab: boolean, shouldShowArchiveTab: boolean) {
+    if (shouldShowInfoTab) {
+        return ChannelSettingsTabs.INFO;
+    }
+    if (shouldShowAccessRulesTab) {
+        return ChannelSettingsTabs.ACCESS_RULES;
+    }
+    if (shouldShowConfigurationTab) {
+        return ChannelSettingsTabs.CONFIGURATION;
+    }
+    if (shouldShowArchiveTab) {
+        return ChannelSettingsTabs.ARCHIVE;
+    }
+    return ChannelSettingsTabs.INFO;
+}
+
 function ChannelSettingsModal({channelId, isOpen, onExited, focusOriginElement}: ChannelSettingsModalProps) {
     const {formatMessage} = useIntl();
     const dispatch = useDispatch();
     const channel = useSelector((state: GlobalState) => getChannel(state, channelId)) as Channel;
-    const channelBannerEnabled = useSelector(selectChannelBannerEnabled);
+    const isDMorGM = channel.type === Constants.DM_CHANNEL || channel.type === Constants.GM_CHANNEL;
+    const channelBannerEnabled = isMinimumEnterpriseAdvancedLicense(useSelector(getLicense));
 
     const canManagePublicChannelBanner = useSelector((state: GlobalState) =>
         haveIChannelPermission(state, channel.team_id, channel.id, Permissions.MANAGE_PUBLIC_CHANNEL_BANNER),
@@ -67,7 +85,40 @@ function ChannelSettingsModal({channelId, isOpen, onExited, focusOriginElement}:
     );
     const hasManageChannelBannerPermission = (channel.type === 'O' && canManagePublicChannelBanner) || (channel.type === 'P' && canManagePrivateChannelBanner);
 
-    const shouldShowConfigurationTab = channelBannerEnabled && hasManageChannelBannerPermission;
+    const canManageChannelTranslation = useSelector((state: GlobalState) => {
+        const config = getConfig(state);
+        if (config?.EnableAutoTranslation !== 'true') {
+            return false;
+        }
+
+        const isDMorGM = channel.type === Constants.DM_CHANNEL || channel.type === Constants.GM_CHANNEL;
+        if (isDMorGM && config?.RestrictDMAndGMAutotranslation === 'true') {
+            return false;
+        }
+
+        const permissionToCheck = channel.type === Constants.PRIVATE_CHANNEL ? Permissions.MANAGE_PRIVATE_CHANNEL_AUTO_TRANSLATION : Permissions.MANAGE_PUBLIC_CHANNEL_AUTO_TRANSLATION;
+        return haveIChannelPermission(state, channel.team_id, channel.id, permissionToCheck);
+    });
+
+    const canManageBanner = channelBannerEnabled && hasManageChannelBannerPermission;
+    const canManageSharedChannels = useSelector((state: GlobalState) => {
+        const config = getConfig(state);
+        const connectedWorkspacesEnabled = config?.ExperimentalSharedChannels === 'true';
+        if (!connectedWorkspacesEnabled || isDMorGM) {
+            return false;
+        }
+        return haveISystemPermission(state, {permission: Permissions.MANAGE_SHARED_CHANNELS});
+    });
+    const shouldShowConfigurationTab = canManageBanner || canManageChannelTranslation || canManageSharedChannels;
+
+    const canManageChannelProperties = useSelector((state: GlobalState) => {
+        if (isDMorGM) {
+            return true;
+        }
+        const permission = channel.type === Constants.PRIVATE_CHANNEL ? Permissions.MANAGE_PRIVATE_CHANNEL_PROPERTIES : Permissions.MANAGE_PUBLIC_CHANNEL_PROPERTIES;
+        return haveIChannelPermission(state, channel.team_id, channel.id, permission);
+    });
+    const shouldShowInfoTab = canManageChannelProperties;
 
     const canArchivePrivateChannels = useSelector((state: GlobalState) =>
         haveIChannelPermission(state, channel.team_id, channel.id, Permissions.DELETE_PRIVATE_CHANNEL),
@@ -81,21 +132,30 @@ function ChannelSettingsModal({channelId, isOpen, onExited, focusOriginElement}:
         haveIChannelPermission(state, channel.team_id, channel.id, Permissions.MANAGE_CHANNEL_ACCESS_RULES),
     );
 
-    // FEATURE_FLAG_REMOVAL: ChannelAdminManageABACControl - Remove the feature flag check when feature is GA
-    const channelAdminABACControlEnabled = useSelector(isChannelAdminManageABACControlEnabled);
+    const channelAdminABACControlEnabled = useSelector(isChannelAccessControlEnabled);
 
     const shouldShowAccessRulesTab = channelAdminABACControlEnabled && canManageChannelAccessRules && channel.type === Constants.PRIVATE_CHANNEL && !channel.group_constrained;
 
+    const shouldShowArchiveTab = channel.name !== Constants.DEFAULT_CHANNEL &&
+        ((channel.type === Constants.PRIVATE_CHANNEL && canArchivePrivateChannels) ||
+        (channel.type === Constants.OPEN_CHANNEL && canArchivePublicChannels));
+
     const [show, setShow] = useState(isOpen);
 
+    // First visible tab (in tab order) for when Info is not available
+    const firstVisibleTab = getFirstVisibleTab(shouldShowInfoTab, shouldShowAccessRulesTab, shouldShowConfigurationTab, shouldShowArchiveTab);
+
     // Active tab
-    const [activeTab, setActiveTab] = useState<ChannelSettingsTabs>(ChannelSettingsTabs.INFO);
+    const [activeTab, setActiveTab] = useState<ChannelSettingsTabs>(firstVisibleTab);
 
     // State for showing error in the save changes panel when trying to switch tabs with unsaved changes
     const [showTabSwitchError, setShowTabSwitchError] = useState(false);
 
     // State to track if there are unsaved changes
     const [areThereUnsavedChanges, setAreThereUnsavedChanges] = useState(false);
+
+    // State to track if user has been warned about unsaved changes
+    const [hasBeenWarned, setHasBeenWarned] = useState(false);
 
     // Refs
     const modalBodyRef = useRef<HTMLDivElement>(null);
@@ -124,7 +184,18 @@ function ChannelSettingsModal({channelId, isOpen, onExited, focusOriginElement}:
     };
 
     const handleHide = () => {
-        handleHideConfirm();
+        // Prevent modal closing if there are unsaved changes (warn once, then allow)
+        if (areThereUnsavedChanges && !hasBeenWarned) {
+            setHasBeenWarned(true);
+
+            // Show error message in SaveChangesPanel
+            setShowTabSwitchError(true);
+            setTimeout(() => {
+                setShowTabSwitchError(false);
+            }, SHOW_PANEL_ERROR_STATE_TAB_SWITCH_TIMEOUT);
+        } else {
+            handleHideConfirm();
+        }
     };
 
     const handleHideConfirm = () => {
@@ -138,6 +209,7 @@ function ChannelSettingsModal({channelId, isOpen, onExited, focusOriginElement}:
     const handleExited = () => {
         // Clear anything if needed
         setActiveTab(ChannelSettingsTabs.INFO);
+        setHasBeenWarned(false);
         if (focusOriginElement) {
             focusElement(focusOriginElement, true);
         }
@@ -176,6 +248,9 @@ function ChannelSettingsModal({channelId, isOpen, onExited, focusOriginElement}:
                 channel={channel}
                 setAreThereUnsavedChanges={setAreThereUnsavedChanges}
                 showTabSwitchError={showTabSwitchError}
+                canManageChannelTranslation={canManageChannelTranslation}
+                canManageBanner={canManageBanner}
+                canManageSharedChannels={canManageSharedChannels}
             />
         );
     };
@@ -206,6 +281,7 @@ function ChannelSettingsModal({channelId, isOpen, onExited, focusOriginElement}:
             uiName: formatMessage({id: 'channel_settings.tab.info', defaultMessage: 'Info'}),
             icon: 'icon icon-information-outline',
             iconTitle: formatMessage({id: 'generic_icons.info', defaultMessage: 'Info Icon'}),
+            display: shouldShowInfoTab,
         },
         {
             name: ChannelSettingsTabs.ACCESS_RULES,
@@ -227,9 +303,7 @@ function ChannelSettingsModal({channelId, isOpen, onExited, focusOriginElement}:
             icon: 'icon icon-archive-outline',
             iconTitle: formatMessage({id: 'generic_icons.archive', defaultMessage: 'Archive Icon'}),
             newGroup: true,
-            display: channel.name !== Constants.DEFAULT_CHANNEL && // archive is not available for the default channel
-                ((channel.type === Constants.PRIVATE_CHANNEL && canArchivePrivateChannels) ||
-                (channel.type === Constants.OPEN_CHANNEL && canArchivePublicChannels)),
+            display: shouldShowArchiveTab,
         },
     ];
 
@@ -265,6 +339,7 @@ function ChannelSettingsModal({channelId, isOpen, onExited, focusOriginElement}:
             className='ChannelSettingsModal settings-modal'
             show={show}
             onHide={handleHide}
+            preventClose={areThereUnsavedChanges && !hasBeenWarned}
             onExited={handleExited}
             compassDesign={true}
             modalHeaderText={modalTitle}

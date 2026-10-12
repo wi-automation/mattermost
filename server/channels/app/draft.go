@@ -51,6 +51,16 @@ func (a *App) UpsertDraft(rctx request.CTX, draft *model.Draft, connectionID str
 		return nil, err
 	}
 
+	restrictDM, err := a.CheckIfChannelIsRestrictedDM(rctx, channel)
+	if err != nil {
+		return nil, err
+	}
+
+	if restrictDM {
+		err := model.NewAppError("CreateDraft", "api.draft.create_draft.can_not_draft_to_restricted_dm.error", nil, "", http.StatusBadRequest)
+		return nil, err
+	}
+
 	_, nErr := a.Srv().Store().User().Get(context.Background(), draft.UserId)
 	if nErr != nil {
 		return nil, model.NewAppError("CreateDraft", "app.user.get.app_error", nil, "", http.StatusInternalServerError).Wrap(nErr)
@@ -132,6 +142,21 @@ func (a *App) getFileInfosForDraft(rctx request.CTX, draft *model.Draft) ([]*mod
 
 	if len(fileInfos) == 0 {
 		return nil, nil
+	}
+
+	// A draft is unsent content the author still has to be able to see and send, so the
+	// metadata stays. The rendered thumbnail is the file's actual content, so it is
+	// withheld — and never generated — when the policy denies downloading it.
+	if !a.hasFileAttachmentAccess(rctx, draft.UserId, draft.ChannelId) {
+		rctx.Logger().Debug("Withholding draft file thumbnails due to ABAC permission policy",
+			mlog.String("user_id", draft.UserId),
+			mlog.String("channel_id", draft.ChannelId),
+		)
+		for _, fileInfo := range fileInfos {
+			fileInfo.MiniPreview = nil
+		}
+
+		return fileInfos, nil
 	}
 
 	a.generateMiniPreviewForInfos(rctx, fileInfos)

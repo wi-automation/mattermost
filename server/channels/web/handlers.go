@@ -25,6 +25,15 @@ import (
 	"github.com/mattermost/mattermost/server/v8/channels/utils"
 )
 
+// tokenDigest returns a stable, non-reversible identifier for a token, usable for correlation.
+func tokenDigest(token string) string {
+	if token == "" {
+		return "<none>"
+	}
+
+	return utils.HashSha256(token)[:16]
+}
+
 func GetHandlerName(h func(*Context, http.ResponseWriter, *http.Request)) string {
 	handlerName := runtime.FuncForPC(reflect.ValueOf(h).Pointer()).Name()
 	pos := strings.LastIndex(handlerName, ".")
@@ -258,22 +267,22 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		session, err := c.App.GetSession(token)
 
 		if err != nil {
-			c.Logger.Info("Invalid session", mlog.Err(err))
+			c.Logger.Info("Invalid session", mlog.String("error", strings.ReplaceAll(err.Error(), token, tokenDigest(token))))
 			if err.StatusCode == http.StatusInternalServerError {
 				c.Err = err
 			} else if h.RequireSession {
 				c.RemoveSessionCookie(w, r)
-				c.Err = model.NewAppError("ServeHTTP", "api.context.session_expired.app_error", nil, "token="+token, http.StatusUnauthorized)
+				c.Err = model.NewAppError("ServeHTTP", "api.context.session_expired.app_error", nil, "token_sha256="+tokenDigest(token), http.StatusUnauthorized)
 			}
 		} else if !session.IsOAuth && tokenLocation == app.TokenLocationQueryString {
-			c.Err = model.NewAppError("ServeHTTP", "api.context.token_provided.app_error", nil, "token="+token, http.StatusUnauthorized)
+			c.Err = model.NewAppError("ServeHTTP", "api.context.token_provided.app_error", nil, "token_sha256="+tokenDigest(token), http.StatusUnauthorized)
 		} else {
 			c.AppContext = c.AppContext.WithSession(session)
 		}
 
 		// Rate limit by UserID
 		if c.App.Srv().RateLimiter != nil {
-			rateLimitExceeded = c.App.Srv().RateLimiter.UserIdRateLimit(c.AppContext.Session().UserId, w)
+			rateLimitExceeded = c.App.Srv().RateLimiter.UserIdRateLimit(r.Context(), c.AppContext.Session().UserId, w)
 			if rateLimitExceeded {
 				return
 			}
@@ -283,13 +292,13 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if csrfChecked && !csrfPassed {
 			c.AppContext = c.AppContext.WithSession(&model.Session{})
 			c.RemoveSessionCookie(w, r)
-			c.Err = model.NewAppError("ServeHTTP", "api.context.session_expired.app_error", nil, "token="+token+" Appears to be a CSRF attempt", http.StatusUnauthorized)
+			c.Err = model.NewAppError("ServeHTTP", "api.context.session_expired.app_error", nil, "token_sha256="+tokenDigest(token)+" Appears to be a CSRF attempt", http.StatusUnauthorized)
 		}
 	} else if token != "" && c.App.Channels().License().IsCloud() && tokenLocation == app.TokenLocationCloudHeader {
 		// Check to see if this provided token matches our CWS Token
 		session, err := c.App.GetCloudSession(token)
 		if err != nil {
-			c.Logger.Warn("Invalid CWS token", mlog.Err(err))
+			c.Logger.Warn("Invalid CWS token", mlog.String("error", strings.ReplaceAll(err.Error(), token, tokenDigest(token))))
 			c.Err = err
 		} else {
 			c.AppContext = c.AppContext.WithSession(session)
@@ -303,7 +312,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// Check the token is correct for the remote cluster id.
 			session, err := c.App.GetRemoteClusterSession(token, remoteId)
 			if err != nil {
-				c.Logger.Warn("Invalid remote cluster token", mlog.Err(err))
+				c.Logger.Warn("Invalid remote cluster token", mlog.String("error", strings.ReplaceAll(err.Error(), token, tokenDigest(token))))
 				c.Err = err
 			} else {
 				c.AppContext = c.AppContext.WithSession(session)
@@ -325,7 +334,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if c.Err == nil && h.RequireMfa {
-		c.MfaRequired()
+		c.MfaRequired(r.Method)
 	}
 
 	if c.Err == nil && h.DisableWhenBusy && c.App.Srv().Platform().Busy.IsBusy() {
@@ -391,6 +400,19 @@ func (h Handler) handleContextError(c *Context, w http.ResponseWriter, r *http.R
 		// replace the context error with this error if so,
 		newErr := model.NewAppError(c.Err.Where, "api.context.request_body_too_large.app_error", nil, "Use the setting `MaximumPayloadSizeBytes` in Mattermost config to configure allowed payload limit. Learn more about this setting in Mattermost docs at https://docs.mattermost.com/configure/environment-configuration-settings.html#maximum-payload-size", http.StatusRequestEntityTooLarge)
 		c.Err = newErr
+	}
+
+	// Detect and fix AppError with missing StatusCode to prevent panics
+	if c.Err.StatusCode == 0 {
+		c.Logger.Error("AppError with zero StatusCode detected",
+			mlog.String("error_id", c.Err.Id),
+			mlog.String("error_message", c.Err.Message),
+			mlog.String("error_where", c.Err.Where),
+			mlog.String("request_path", r.URL.Path),
+			mlog.String("request_method", r.Method),
+			mlog.String("detailed_error", c.Err.DetailedError),
+		)
+		c.Err.StatusCode = http.StatusInternalServerError
 	}
 
 	c.Err.RequestId = c.AppContext.RequestId()
@@ -494,7 +516,7 @@ func (h *Handler) checkCSRFToken(c *Context, r *http.Request, tokenLocation app.
 				mlog.String("user_id", session.UserId),
 			}
 
-			if *c.App.Config().ServiceSettings.StrictCSRFEnforcement {
+			if *c.App.Config().ServiceSettings.ExperimentalStrictCSRFEnforcement {
 				c.Logger.Warn(csrfErrorMessage, fields...)
 			} else {
 				c.Logger.Debug(csrfErrorMessage, fields...)

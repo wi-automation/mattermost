@@ -4,7 +4,6 @@
 package web
 
 import (
-	b64 "encoding/base64"
 	"html"
 	"net/http"
 	"strconv"
@@ -17,6 +16,11 @@ import (
 )
 
 const maxSAMLResponseSize = 2 * 1024 * 1024 // 2MB
+
+// maxRelayStatePropsSize is a sanity bound on the signed relayProps payload size. It isn't tied
+// to any storage constraint (RelayState is no longer persisted) - it just keeps a maliciously
+// large redirect_to from bloating the RelayState round-tripped through the IdP indefinitely.
+const maxRelayStatePropsSize = 4096
 
 func (w *Web) InitSaml() {
 	w.MainRouter.Handle("/login/sso/saml", w.APIHandler(loginWithSaml)).Methods(http.MethodGet)
@@ -37,6 +41,10 @@ func loginWithSaml(c *Context, w http.ResponseWriter, r *http.Request) {
 	action := r.URL.Query().Get("action")
 	isMobile := action == model.OAuthActionMobile
 	redirectURL := html.EscapeString(r.URL.Query().Get("redirect_to"))
+	// Optional SAML challenge parameters for mobile code-exchange
+	state := r.URL.Query().Get("state")
+	codeChallenge := r.URL.Query().Get("code_challenge")
+	codeChallengeMethod := r.URL.Query().Get("code_challenge_method")
 	relayProps := map[string]string{}
 	relayState := ""
 
@@ -61,6 +69,19 @@ func loginWithSaml(c *Context, w http.ResponseWriter, r *http.Request) {
 		relayProps["redirect_to"] = redirectURL
 	}
 
+	// Forward SAML challenge values via RelayState so the complete step can prefer code-exchange
+	if isMobile {
+		if state != "" {
+			relayProps["state"] = state
+		}
+		if codeChallenge != "" {
+			relayProps["code_challenge"] = codeChallenge
+		}
+		if codeChallengeMethod != "" {
+			relayProps["code_challenge_method"] = codeChallengeMethod
+		}
+	}
+
 	desktopToken := r.URL.Query().Get("desktop_token")
 	if desktopToken != "" {
 		relayProps["desktop_token"] = desktopToken
@@ -69,7 +90,12 @@ func loginWithSaml(c *Context, w http.ResponseWriter, r *http.Request) {
 	relayProps[model.UserAuthServiceIsMobile] = strconv.FormatBool(isMobile)
 
 	if len(relayProps) > 0 {
-		relayState = b64.StdEncoding.EncodeToString([]byte(model.MapToJSON(relayProps)))
+		if size := len(model.MapToJSON(relayProps)); size > maxRelayStatePropsSize {
+			c.Err = model.NewAppError("loginWithSaml", "api.user.saml.relay_state_too_long.app_error", nil, "", http.StatusBadRequest)
+			return
+		}
+
+		relayState = model.SignSamlRelayState(c.App.SamlRelayStateSigningKey(), relayProps)
 	}
 
 	data, err := samlInterface.BuildRequest(c.AppContext, relayState)
@@ -89,20 +115,18 @@ func completeSaml(c *Context, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//Validate that the user is with SAML and all that
+	// Validate that the user is with SAML and all that
 	encodedXML := r.FormValue("SAMLResponse")
 	relayState := r.FormValue("RelayState")
 
 	relayProps := make(map[string]string)
 	if relayState != "" {
-		stateStr := ""
-		b, err := b64.StdEncoding.DecodeString(relayState)
+		props, err := model.VerifySamlRelayState(c.App.SamlRelayStateSigningKey(), relayState)
 		if err != nil {
 			c.Err = model.NewAppError("completeSaml", "api.user.authorize_oauth_user.invalid_state.app_error", nil, "", http.StatusFound).Wrap(err)
 			return
 		}
-		stateStr = string(b)
-		relayProps = model.MapFromJSON(strings.NewReader(stateStr))
+		relayProps = props
 	}
 
 	auditRec := c.MakeAuditRecord(model.AuditEventCompleteSaml, model.AuditStatusFail)
@@ -144,7 +168,8 @@ func completeSaml(c *Context, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = c.App.CheckUserAllAuthenticationCriteria(c.AppContext, user, ""); err != nil {
+	err = c.App.CheckUserAllAuthenticationCriteria(c.AppContext, user, "")
+	if err != nil {
 		handleError(err)
 		return
 	}
@@ -220,7 +245,36 @@ func completeSaml(c *Context, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If it's not a desktop login we create a session for this SAML User that will be used in their browser or mobile app
+	// Decide between legacy token-in-URL vs SAML code-exchange for mobile
+	samlState := relayProps["state"]
+	samlChallenge := relayProps["code_challenge"]
+	samlMethod := relayProps["code_challenge_method"]
+
+	if isMobile && hasRedirectURL && samlChallenge != "" && c.App.Config().FeatureFlags.MobileSSOCodeExchange {
+		// Issue one-time login_code bound to user and SAML challenge values; do not create a session here
+		extra := model.MapToJSON(map[string]string{
+			"user_id":               user.Id,
+			"state":                 samlState,
+			"code_challenge":        samlChallenge,
+			"code_challenge_method": samlMethod,
+		})
+
+		var code *model.Token
+		code, err = c.App.CreateSamlRelayToken(model.TokenTypeSSOCodeExchange, extra)
+		if err != nil {
+			handleError(model.NewAppError("completeSaml", "app.recover.save.app_error", nil, "", http.StatusInternalServerError).Wrap(err))
+			return
+		}
+
+		redirectURL = utils.AppendQueryParamsToURL(redirectURL, map[string]string{
+			"login_code": code.Token,
+			"srv":        c.App.GetSiteURL(), // Server URL for mobile client verification
+		})
+		utils.RenderMobileAuthComplete(w, redirectURL)
+		return
+	}
+
+	// Legacy: create a session and attach tokens (web/mobile without SAML code exchange)
 	session, err := c.App.DoLogin(c.AppContext, w, r, user, "", isMobile, false, true)
 	if err != nil {
 		handleError(err)
@@ -235,9 +289,11 @@ func completeSaml(c *Context, w http.ResponseWriter, r *http.Request) {
 	if hasRedirectURL {
 		if isMobile {
 			// Mobile clients with redirect url support
+			// Always add tokens for mobile in legacy path (we only reach here if code-exchange was skipped)
 			redirectURL = utils.AppendQueryParamsToURL(redirectURL, map[string]string{
 				model.SessionCookieToken: c.AppContext.Session().Token,
 				model.SessionCookieCsrf:  c.AppContext.Session().GetCSRF(),
+				"srv":                    c.App.GetSiteURL(), // Server URL for mobile client verification (config-based, not request Host)
 			})
 			utils.RenderMobileAuthComplete(w, redirectURL)
 		} else {

@@ -161,31 +161,6 @@ func (s *SqlReactionStore) GetUniqueCountForPost(postId string) (int, error) {
 	return int(count), nil
 }
 
-func (s *SqlReactionStore) BulkGetForPosts(postIds []string) ([]*model.Reaction, error) {
-	placeholder, values := constructArrayArgs(postIds)
-	var reactions []*model.Reaction
-
-	if err := s.GetReplica().Select(&reactions,
-		`SELECT
-				UserId,
-				PostId,
-				EmojiName,
-				CreateAt,
-				COALESCE(UpdateAt, CreateAt) As UpdateAt,
-				COALESCE(DeleteAt, 0) As DeleteAt,
-				RemoteId,
-				ChannelId
-			FROM
-				Reactions
-			WHERE
-				PostId IN `+placeholder+` AND COALESCE(DeleteAt, 0) = 0
-			ORDER BY
-				CreateAt`, values...); err != nil {
-		return nil, errors.Wrap(err, "failed to get Reactions")
-	}
-	return reactions, nil
-}
-
 func (s *SqlReactionStore) GetSingle(userID, postID, remoteID, emojiName string) (*model.Reaction, error) {
 	query := s.getQueryBuilder().
 		Select("UserId", "PostId", "EmojiName", "CreateAt",
@@ -345,12 +320,7 @@ func (s *SqlReactionStore) DeleteOrphanedRowsByIds(r *model.RetentionIdsForDelet
 }
 
 func (s *SqlReactionStore) PermanentDeleteBatch(endTime int64, limit int64) (int64, error) {
-	var query string
-	if s.DriverName() == "postgres" {
-		query = "DELETE from Reactions WHERE CreateAt = any (array (SELECT CreateAt FROM Reactions WHERE CreateAt < ? LIMIT ?))"
-	} else {
-		query = "DELETE from Reactions WHERE CreateAt < ? LIMIT ?"
-	}
+	query := "DELETE from Reactions WHERE CreateAt = any (array (SELECT CreateAt FROM Reactions WHERE CreateAt < ? LIMIT ?))"
 
 	sqlResult, err := s.GetMaster().Exec(query, endTime, limit)
 	if err != nil {

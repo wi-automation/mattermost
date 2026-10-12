@@ -1,6 +1,6 @@
 # Copyright (c) 2016-present Mattermost, Inc. All Rights Reserved.
 # See License.txt for license information.
-FROM postgres:13
+FROM postgres:14
 
 RUN apt-get update && apt-get install -y ca-certificates
 
@@ -10,7 +10,7 @@ ARG MATTERMOST_VERSION
 #
 
 ENV POSTGRES_USER=mmuser
-ENV POSTGRES_PASSWORD=mostest
+ENV POSTGRES_PASSWORD=mostest_password
 ENV POSTGRES_DB=mattermost_test
 
 #

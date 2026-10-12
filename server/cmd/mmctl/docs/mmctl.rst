@@ -37,7 +37,6 @@ SEE ALSO
 * `mmctl completion <mmctl_completion.rst>`_ 	 - Generate the autocompletion script for the specified shell
 * `mmctl compliance-export <mmctl_compliance-export.rst>`_ 	 - Management of compliance exports
 * `mmctl config <mmctl_config.rst>`_ 	 - Configuration
-* `mmctl cpa <mmctl_cpa.rst>`_ 	 - Management of Custom Profile Attributes
 * `mmctl docs <mmctl_docs.rst>`_ 	 - Generates mmctl documentation
 * `mmctl export <mmctl_export.rst>`_ 	 - Management of exports
 * `mmctl extract <mmctl_extract.rst>`_ 	 - Management of content extraction job.
@@ -52,6 +51,7 @@ SEE ALSO
 * `mmctl permissions <mmctl_permissions.rst>`_ 	 - Management of permissions
 * `mmctl plugin <mmctl_plugin.rst>`_ 	 - Management of plugins
 * `mmctl post <mmctl_post.rst>`_ 	 - Management of posts
+* `mmctl report <mmctl_report.rst>`_ 	 - Reporting commands
 * `mmctl roles <mmctl_roles.rst>`_ 	 - Manage user roles
 * `mmctl saml <mmctl_saml.rst>`_ 	 - SAML related utilities
 * `mmctl sampledata <mmctl_sampledata.rst>`_ 	 - Generate sample data

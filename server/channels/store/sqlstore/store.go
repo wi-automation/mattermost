@@ -49,7 +49,7 @@ const (
 	// After 10, it's major and minor only.
 	// 10.1 would be 100001.
 	// 9.6.3 would be 90603.
-	minimumRequiredPostgresVersion = 130000
+	minimumRequiredPostgresVersion = 140000
 
 	migrationsDirectionUp   migrationDirection = "up"
 	migrationsDirectionDown migrationDirection = "down"
@@ -106,11 +106,17 @@ type SqlStoreStores struct {
 	desktopTokens              store.DesktopTokensStore
 	channelBookmarks           store.ChannelBookmarkStore
 	scheduledPost              store.ScheduledPostStore
+	view                       store.ViewStore
 	propertyGroup              store.PropertyGroupStore
 	propertyField              store.PropertyFieldStore
 	propertyValue              store.PropertyValueStore
 	accessControlPolicy        store.AccessControlPolicyStore
 	Attributes                 store.AttributesStore
+	autotranslation            store.AutoTranslationStore
+	ContentFlagging            store.ContentFlaggingStore
+	recap                      store.RecapStore
+	readReceipt                store.ReadReceiptStore
+	temporaryPost              store.TemporaryPostStore
 }
 
 type SqlStore struct {
@@ -129,7 +135,6 @@ type SqlStore struct {
 	stores            SqlStoreStores
 	settings          *model.SqlSettings
 	lockedToMaster    bool
-	context           context.Context
 	license           *model.License
 	licenseMutex      sync.RWMutex
 	logger            mlog.LoggerIFace
@@ -139,9 +144,21 @@ type SqlStore struct {
 	pgDefaultTextSearchConfig string
 	skipMigrations            bool
 	disableMorphLogging       bool
+	featureFlagsFn            func() *model.FeatureFlags
 
 	quitMonitor chan struct{}
 	wgMonitor   *sync.WaitGroup
+
+	// maxInsertParams overrides defaultMaxInsertParams when > 0. Exposed for
+	// tests that need to force multi-chunk behaviour with small row counts.
+	maxInsertParams int
+}
+
+func (ss *SqlStore) getMaxInsertParams() int {
+	if ss.maxInsertParams > 0 {
+		return ss.maxInsertParams
+	}
+	return defaultMaxInsertParams
 }
 
 func SkipMigrations() Option {
@@ -156,6 +173,25 @@ func DisableMorphLogging() Option {
 		s.disableMorphLogging = true
 		return nil
 	}
+}
+
+// WithFeatureFlags provides a callback that returns the current feature flags.
+// This allows the store layer to read feature flags without depending on the full config.
+func WithFeatureFlags(fn func() *model.FeatureFlags) Option {
+	return func(s *SqlStore) error {
+		s.featureFlagsFn = fn
+		return nil
+	}
+}
+
+// getFeatureFlags returns the current feature flags, or defaults if no function was configured.
+func (ss *SqlStore) getFeatureFlags() *model.FeatureFlags {
+	if ss.featureFlagsFn != nil {
+		return ss.featureFlagsFn()
+	}
+	ff := &model.FeatureFlags{}
+	ff.SetDefaults()
+	return ff
 }
 
 func New(settings model.SqlSettings, logger mlog.LoggerIFace, metrics einterfaces.MetricsInterface, options ...Option) (*SqlStore, error) {
@@ -188,12 +224,16 @@ func New(settings model.SqlSettings, logger mlog.LoggerIFace, metrics einterface
 		return nil, errors.Wrap(err, "error while getting DB version")
 	}
 
-	ok, err := store.ensureMinimumDBVersion(ver)
-	if !ok {
+	if err = store.checkVersion(ver); err != nil {
 		return nil, errors.Wrap(err, "error while checking DB version")
 	}
 
 	if !store.skipMigrations {
+		err = store.preMigration()
+		if err != nil {
+			return nil, errors.Wrap(err, "error while running pre-migrations")
+		}
+
 		err = store.migrate(migrationsDirectionUp, false, !store.disableMorphLogging)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to apply database migrations")
@@ -256,23 +296,21 @@ func New(settings model.SqlSettings, logger mlog.LoggerIFace, metrics einterface
 	store.stores.desktopTokens = newSqlDesktopTokensStore(store, metrics)
 	store.stores.channelBookmarks = newSqlChannelBookmarkStore(store)
 	store.stores.scheduledPost = newScheduledPostStore(store)
+	store.stores.view = newSqlViewStore(store)
 	store.stores.propertyGroup = newPropertyGroupStore(store)
 	store.stores.propertyField = newPropertyFieldStore(store)
 	store.stores.propertyValue = newPropertyValueStore(store)
 	store.stores.accessControlPolicy = newSqlAccessControlPolicyStore(store, metrics)
 	store.stores.Attributes = newSqlAttributesStore(store, metrics)
+	store.stores.autotranslation = newSqlAutoTranslationStore(store)
+	store.stores.ContentFlagging = newContentFlaggingStore(store)
+	store.stores.recap = newSqlRecapStore(store)
+	store.stores.readReceipt = newSqlReadReceiptStore(store, metrics)
+	store.stores.temporaryPost = newSqlTemporaryPostStore(store, metrics)
 
 	store.stores.preference.(*SqlPreferenceStore).deleteUnusedFeatures()
 
 	return store, nil
-}
-
-func (ss *SqlStore) SetContext(context context.Context) {
-	ss.context = context
-}
-
-func (ss *SqlStore) Context() context.Context {
-	return ss.context
 }
 
 func (ss *SqlStore) Logger() mlog.LoggerIFace {
@@ -345,42 +383,23 @@ func (ss *SqlStore) DriverName() string {
 }
 
 // specialSearchChars have special meaning and can be treated as spaces
-func (ss *SqlStore) specialSearchChars() []string {
-	chars := []string{
-		"<",
-		">",
-		"+",
-		"-",
-		"(",
-		")",
-		"~",
-		":",
-	}
-
-	// Postgres can handle "@" without any errors
-	// Also helps postgres in enabling search for EmailAddresses
-	if ss.DriverName() != model.DatabaseDriverPostgres {
-		chars = append(chars, "@")
-	}
-
-	return chars
+var specialSearchChars = []string{
+	"<",
+	">",
+	"+",
+	"-",
+	"(",
+	")",
+	"~",
+	":",
 }
 
 // computeBinaryParam returns whether the data source uses binary_parameters
-// when using Postgres
 func (ss *SqlStore) computeBinaryParam() (bool, error) {
-	if ss.DriverName() != model.DatabaseDriverPostgres {
-		return false, nil
-	}
-
 	return DSNHasBinaryParam(*ss.settings.DataSource)
 }
 
 func (ss *SqlStore) computeDefaultTextSearchConfig() (string, error) {
-	if ss.DriverName() != model.DatabaseDriverPostgres {
-		return "", nil
-	}
-
 	var defaultTextSearchConfig string
 	err := ss.GetMaster().Get(&defaultTextSearchConfig, `SHOW default_text_search_config`)
 	return defaultTextSearchConfig, err
@@ -395,14 +414,10 @@ func (ss *SqlStore) IsBinaryParamEnabled() bool {
 // that can be parsed by callers.
 func (ss *SqlStore) GetDbVersion(numerical bool) (string, error) {
 	var sqlVersion string
-	if ss.DriverName() == model.DatabaseDriverPostgres {
-		if numerical {
-			sqlVersion = `SHOW server_version_num`
-		} else {
-			sqlVersion = `SHOW server_version`
-		}
+	if numerical {
+		sqlVersion = `SHOW server_version_num`
 	} else {
-		return "", errors.New("Not supported driver")
+		sqlVersion = `SHOW server_version`
 	}
 
 	var version string
@@ -462,6 +477,10 @@ func (ss *SqlStore) GetReplica() *sqlxDBWrapper {
 
 	// If all replicas are down, then go with master.
 	return ss.GetMaster()
+}
+
+func (ss *SqlStore) analyticsContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), time.Duration(*ss.settings.AnalyticsQueryTimeout)*time.Second)
 }
 
 func (ss *SqlStore) monitorReplicas() {
@@ -864,6 +883,10 @@ func (ss *SqlStore) ChannelBookmark() store.ChannelBookmarkStore {
 	return ss.stores.channelBookmarks
 }
 
+func (ss *SqlStore) View() store.ViewStore {
+	return ss.stores.view
+}
+
 func (ss *SqlStore) PropertyGroup() store.PropertyGroupStore {
 	return ss.stores.propertyGroup
 }
@@ -882,6 +905,22 @@ func (ss *SqlStore) AccessControlPolicy() store.AccessControlPolicyStore {
 
 func (ss *SqlStore) Attributes() store.AttributesStore {
 	return ss.stores.Attributes
+}
+
+func (ss *SqlStore) AutoTranslation() store.AutoTranslationStore {
+	return ss.stores.autotranslation
+}
+
+func (ss *SqlStore) Recap() store.RecapStore {
+	return ss.stores.recap
+}
+
+func (ss *SqlStore) ReadReceipt() store.ReadReceiptStore {
+	return ss.stores.readReceipt
+}
+
+func (ss *SqlStore) TemporaryPost() store.TemporaryPostStore {
+	return ss.stores.temporaryPost
 }
 
 func (ss *SqlStore) DropAllTables() {
@@ -936,19 +975,6 @@ func (ss *SqlStore) hasLicense() bool {
 	return hasLicense
 }
 
-func convertMySQLFullTextColumnsToPostgres(columnNames string) string {
-	columns := strings.Split(columnNames, ", ")
-	concatenatedColumnNames := ""
-	for i, c := range columns {
-		concatenatedColumnNames += c
-		if i < len(columns)-1 {
-			concatenatedColumnNames += " || ' ' || "
-		}
-	}
-
-	return concatenatedColumnNames
-}
-
 // IsDuplicate checks whether an error is a duplicate key error, which comes when processes are competing on creating the same
 // tables in the database.
 func IsDuplicate(err error) bool {
@@ -962,30 +988,38 @@ func IsDuplicate(err error) bool {
 	return false
 }
 
-// ensureMinimumDBVersion gets the DB version and ensures it is
-// above the required minimum version requirements.
-func (ss *SqlStore) ensureMinimumDBVersion(ver string) (bool, error) {
-	switch *ss.settings.DriverName {
-	case model.DatabaseDriverPostgres:
-		intVer, err2 := strconv.Atoi(ver)
-		if err2 != nil {
-			return false, fmt.Errorf("cannot parse DB version: %v", err2)
-		}
-		if intVer < minimumRequiredPostgresVersion {
-			return false, fmt.Errorf("minimum Postgres version requirements not met. Found: %s, Wanted: %s", versionString(intVer, *ss.settings.DriverName), versionString(minimumRequiredPostgresVersion, *ss.settings.DriverName))
-		}
+// checkVersion returns an error if the given Postgres version cannot be
+// determined. An unsupported version is only logged: running one is discouraged,
+// but not prevented.
+func (ss *SqlStore) checkVersion(ver string) error {
+	intVer, err := strconv.Atoi(ver)
+	if err != nil {
+		return fmt.Errorf("cannot parse DB version: %v", err)
 	}
-	return true, nil
+
+	if intVer < minimumRequiredPostgresVersion {
+		ss.logger.Error("Unsupported Postgres version. Running an unsupported version may lead to unexpected behaviour.",
+			mlog.String("version", versionString(intVer)),
+			mlog.String("min_version", versionString(minimumRequiredPostgresVersion)),
+		)
+	}
+
+	return nil
 }
 
 // versionString converts an integer representation of a Postgres DB version
 // to a pretty-printed string.
-// Postgres doesn't follow three-part version numbers from 10.0 onwards:
+// From 10.0 onwards, the version is the major version multiplied by 10000 plus
+// the minor version, e.g. 10.1 is 100001. Prior to 10, the version used two
+// digits for each of the three parts, e.g. 9.1.5 is 90105:
 // https://www.postgresql.org/docs/13/libpq-status.html#LIBPQ-PQSERVERVERSION.
-func versionString(v int, driver string) string {
-	minor := v % 10000
+func versionString(v int) string {
 	major := v / 10000
-	return strconv.Itoa(major) + "." + strconv.Itoa(minor)
+	if major < 10 {
+		return fmt.Sprintf("%d.%d.%d", major, (v/100)%100, v%100)
+	}
+
+	return fmt.Sprintf("%d.%d", major, v%10000)
 }
 
 func (ss *SqlStore) toReserveCase(str string) string {
@@ -1064,4 +1098,155 @@ func (ss *SqlStore) determineMaxColumnSize(tableName, columnName string) (int, e
 
 func (ss *SqlStore) ScheduledPost() store.ScheduledPostStore {
 	return ss.stores.scheduledPost
+}
+
+func (ss *SqlStore) ContentFlagging() store.ContentFlaggingStore {
+	return ss.stores.ContentFlagging
+}
+
+// preMigration	runs before running the actual Morph migrations.
+// The main reason for having a preMigration is to fix https://mattermost.atlassian.net/browse/MM-68848?focusedCommentId=217769
+// However, using that as an opportunity, a general purpose system is created that allows running
+// arbitrary code just before the Morph migrations run. This allows us to have a way to fix
+// any issues in the DB that might prevent the Morph migrations from running successfully.
+// The pre-migrations are tracked in the Systems table to make sure they run only once.
+func (ss *SqlStore) preMigration() error {
+	type sqlMigration struct {
+		name string
+		// minDBMigration is the schema migration version that must already have
+		// been applied (recorded in db_migrations) before this pre-migration is
+		// allowed to run. A pre-migration that touches data in a table created
+		// by schema migration N should set this to N.
+		minDBMigration int
+		handler        func() error
+	}
+
+	migrations := []sqlMigration{
+		{"renumber_roles_schemeid_migrations", 144, ss.doRenumberRolesSchemeIdMigrations},
+	}
+
+	// To check for empty DB and skip
+	exists, err := ss.tableExists("db_migrations")
+	if err != nil {
+		return errors.Wrap(err, "failed to check if db_migrations table exists")
+	}
+	if !exists {
+		return nil
+	}
+
+	// Checking for systems table because that's where the run status of individual pre migrations are stored
+	exists, err = ss.tableExists("systems")
+	if err != nil {
+		return errors.Wrap(err, "failed to check if Systems table exists")
+	}
+	if !exists {
+		return nil
+	}
+
+	for _, m := range migrations {
+		applied, err := ss.isDBMigrationApplied(m.minDBMigration)
+		if err != nil {
+			return errors.Wrapf(err, "failed to check DB migration %d status", m.minDBMigration)
+		}
+		if !applied {
+			continue
+		}
+
+		done, err := ss.isPreMigrationComplete(m.name)
+		if err != nil {
+			return errors.Wrapf(err, "failed to check pre-migration %q status", m.name)
+		}
+		if done {
+			continue
+		}
+
+		ss.logger.Debug("Running pre-migration", mlog.String("name", m.name), mlog.Int("min_db_migration", m.minDBMigration))
+		if err := m.handler(); err != nil {
+			return errors.Wrapf(err, "failed to run pre-migration %q", m.name)
+		}
+
+		if err := ss.markPreMigrationComplete(m.name); err != nil {
+			return errors.Wrapf(err, "failed to mark pre-migration %q complete", m.name)
+		}
+		ss.logger.Debug("Completed pre-migration", mlog.String("name", m.name))
+	}
+
+	return nil
+}
+
+// This is for resolving the issue described here - https://mattermost.atlassian.net/browse/MM-68848?focusedCommentId=217769
+// Briefly describing here for quick reference -
+// The DB migrations originally numbered 156, 157 and 158 were cherrypicked onto v10.11 release branch but their numbers
+// were changed. When upgrading from v10.11.17 to v11.7, the migrations which were actually supposed to be 142, 143 and 144
+// could never run due to migration version conflict in db_migrations table.
+// This pre-migration functon fixes that issue. When someone upgrades from v10.11 to new release, this function fixes the migration
+// numbers to what they originally were. For example, 142 gets renamed to 156. This lets the missing migrations run successfully and complete the upgrade.
+func (ss *SqlStore) doRenumberRolesSchemeIdMigrations() error {
+	query := `
+UPDATE db_migrations
+SET Version = CASE
+    WHEN Version = 142 AND Name = 'add_schemeid_to_roles'    THEN 156
+    WHEN Version = 143 AND Name = 'backfill_roles_schemeid'  THEN 157
+    WHEN Version = 144 AND Name = 'add_roles_schemeid_index' THEN 158
+END
+WHERE (Version, Name) IN (
+    (142, 'add_schemeid_to_roles'),
+    (143, 'backfill_roles_schemeid'),
+    (144, 'add_roles_schemeid_index')
+)`
+
+	if _, err := ss.GetMaster().Exec(query); err != nil {
+		return errors.Wrap(err, "failed to renumber schema ID related migrations")
+	}
+
+	return nil
+}
+
+func (ss *SqlStore) isDBMigrationApplied(version int) (bool, error) {
+	var exists bool
+	if err := ss.GetMaster().Get(&exists, `
+		SELECT EXISTS (
+			SELECT 1 FROM db_migrations WHERE Version >= $1
+		)
+	`, version); err != nil {
+		return false, errors.Wrap(err, "unable to query db_migrations")
+	}
+	return exists, nil
+}
+
+func (ss *SqlStore) tableExists(tableName string) (bool, error) {
+	var exists bool
+	if err := ss.GetMaster().Get(&exists, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE LOWER(table_name) = $1
+		    AND table_schema = current_schema()
+		)
+	`, strings.ToLower(tableName)); err != nil {
+		return false, errors.Wrap(err, "unable to query information_schema.tables")
+	}
+	return exists, nil
+}
+
+func (ss *SqlStore) isPreMigrationComplete(name string) (bool, error) {
+	var value string
+	err := ss.GetMaster().Get(&value, "SELECT Value FROM Systems WHERE Name = $1", name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, errors.Wrap(err, "unable to select from Systems")
+	}
+	return value == "true", nil
+}
+
+func (ss *SqlStore) markPreMigrationComplete(name string) error {
+	if _, err := ss.GetMaster().Exec(
+		`INSERT INTO Systems (Name, Value) VALUES ($1, $2)
+		 ON CONFLICT (Name) DO UPDATE SET Value = $2`,
+		name, "true",
+	); err != nil {
+		return errors.Wrap(err, "failed to upsert system property")
+	}
+	return nil
 }

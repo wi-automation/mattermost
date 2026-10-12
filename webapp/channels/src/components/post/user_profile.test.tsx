@@ -1,15 +1,26 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
-import {shallow} from 'enzyme';
 import React from 'react';
+import {IntlProvider} from 'react-intl';
 
 import type {Post} from '@mattermost/types/posts';
 
 import UserProfile from 'components/user_profile';
-import BotTag from 'components/widgets/tag/bot_tag';
+
+import {render} from 'tests/react_testing_utils';
 
 import PostUserProfile from './user_profile';
+
+jest.mock('components/user_profile', () => ({
+    __esModule: true,
+    default: jest.fn(() => null),
+}));
+
+jest.mock('components/post_view/post_header_custom_status/post_header_custom_status', () => ({
+    __esModule: true,
+    default: () => null,
+}));
 
 describe('PostUserProfile bot labels', () => {
     const post = {
@@ -18,6 +29,11 @@ describe('PostUserProfile bot labels', () => {
         channel_id: 'channel-id',
         props: {},
     } as Post;
+    const userProfile = jest.mocked(UserProfile);
+
+    beforeEach(() => {
+        userProfile.mockClear();
+    });
 
     test.each([
         {isBot: false, webhook: true},
@@ -31,19 +47,24 @@ describe('PostUserProfile bot labels', () => {
             {isConsecutivePost: true},
             {isSystemMessage: true},
         ]) {
-            const wrapper = shallow(
-                <PostUserProfile
-                    post={{...post, props: {from_webhook: String(webhook)}}}
-                    isBot={isBot}
-                    isSystemMessage={false}
-                    isMobileView={false}
-                    {...layout}
-                />,
+            userProfile.mockClear();
+            const {container, unmount} = render(
+                <IntlProvider locale='en'>
+                    <PostUserProfile
+                        post={{...post, props: {from_webhook: String(webhook)}}}
+                        isBot={isBot}
+                        isSystemMessage={false}
+                        isMobileView={false}
+                        location='CENTER'
+                        {...layout}
+                    />
+                </IntlProvider>,
             );
 
-            expect(wrapper.find(BotTag)).toHaveLength(0);
-            expect(wrapper.find(UserProfile)).toHaveLength(1);
-            expect(wrapper.find(UserProfile).prop('hideBotTag')).toBe(true);
+            expect(container.textContent).not.toContain('BOT');
+            expect(userProfile).toHaveBeenCalled();
+            expect(userProfile.mock.calls.every(([props]) => props.hideBotTag === true)).toBe(true);
+            unmount();
         }
     });
 
@@ -57,18 +78,22 @@ describe('PostUserProfile bot labels', () => {
             },
         };
         const original = JSON.stringify(webhookPost);
-        const wrapper = shallow(
-            <PostUserProfile
-                post={webhookPost}
-                isBot={false}
-                isSystemMessage={false}
-                isMobileView={false}
-                enablePostUsernameOverride={true}
-            />,
+        render(
+            <IntlProvider locale='en'>
+                <PostUserProfile
+                    post={webhookPost}
+                    isBot={false}
+                    isSystemMessage={false}
+                    isMobileView={false}
+                    enablePostUsernameOverride={true}
+                    location='CENTER'
+                />
+            </IntlProvider>,
         );
 
-        expect(wrapper.find(UserProfile).prop('overwriteName')).toBe('Anna Esposito');
-        expect(wrapper.find(UserProfile).prop('overwriteIcon')).toBe('https://example.com/anna.png');
+        const profileProps = userProfile.mock.calls[0]?.[0];
+        expect(profileProps?.overwriteName).toBe('Anna Esposito');
+        expect(profileProps?.overwriteIcon).toBe('https://example.com/anna.png');
         expect(JSON.stringify(webhookPost)).toBe(original);
     });
 });

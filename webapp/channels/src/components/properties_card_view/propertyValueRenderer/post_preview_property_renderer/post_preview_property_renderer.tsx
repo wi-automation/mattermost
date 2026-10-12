@@ -7,21 +7,20 @@ import {useIntl} from 'react-intl';
 import type {PostPreviewMetadata} from '@mattermost/types/posts';
 import type {PropertyValue} from '@mattermost/types/properties';
 
-import {useTeam} from 'components/common/hooks/use_team';
-import {useChannel} from 'components/common/hooks/useChannel';
-import {usePost} from 'components/common/hooks/usePost';
 import PostMessagePreview from 'components/post_view/post_message_preview';
+import type {PostPreviewFieldMetadata} from 'components/properties_card_view/properties_card_view';
 
 const noop = () => {};
 
 type Props = {
-    value: PropertyValue<unknown>;
+    value?: PropertyValue<unknown>;
+    metadata?: PostPreviewFieldMetadata;
 }
 
-export default function PostPreviewPropertyRenderer({value}: Props) {
-    const post = usePost(value.value as string);
-    const channel = useChannel(post?.channel_id || '');
-    const team = useTeam(channel?.team_id || '');
+export default function PostPreviewPropertyRenderer({metadata}: Props) {
+    const post = metadata?.post;
+    const channel = metadata?.channel;
+    const team = metadata?.team;
 
     const {formatMessage} = useIntl();
 
@@ -56,6 +55,9 @@ export default function PostPreviewPropertyRenderer({value}: Props) {
                 handleFileDropdownOpened={noop}
                 preventClickAction={true}
                 previewFooterMessage={postPreviewFooterMessage}
+                usePostAsSource={true}
+                overrideGenerateFileDownloadUrl={metadata?.generateFileDownloadUrl}
+                disableActions={true}
             />
         </div>
     );

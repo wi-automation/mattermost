@@ -603,6 +603,21 @@ func (a *App) importUser(rctx request.CTX, data *imports.UserImportData, dryRun 
 			}
 		} else {
 			if hasUserAuthDataChanged {
+				// Revoke sessions issued under the user's current auth
+				// binding, and invalidate cached user data, before applying
+				// the auth data mutation below via the Store layer directly
+				// (bypassing the app-layer helper, UpdateUserAuth, that
+				// normally accompanies this mutation). Doing this first
+				// keeps the operation retryable: if revocation fails, the
+				// mutation never runs, so a retried import still sees
+				// hasUserAuthDataChanged and re-attempts revocation instead
+				// of silently skipping it because the auth data already
+				// matches the target.
+				if appErr := a.RevokeAllSessions(rctx, user.Id); appErr != nil {
+					return appErr
+				}
+				a.InvalidateCacheForUser(user.Id)
+
 				if _, nErr := a.Srv().Store().User().UpdateAuthData(user.Id, authService, authData, user.Email, false); nErr != nil {
 					var invErr *store.ErrInvalidInput
 					switch {
@@ -857,6 +872,10 @@ func (a *App) importBot(rctx request.CTX, data *imports.BotImportData, dryRun bo
 	var nErr error
 	bot, nErr = a.Srv().Store().Bot().GetByUsername(*data.Username)
 	if nErr != nil {
+		var nfErr *store.ErrNotFound
+		if !errors.As(nErr, &nfErr) {
+			return model.NewAppError("importBot", "app.import.import_bot.lookup_error", nil, "", http.StatusInternalServerError).Wrap(nErr)
+		}
 		bot = &model.Bot{}
 		hasBotChanged = true
 	}
@@ -894,18 +913,59 @@ func (a *App) importBot(rctx request.CTX, data *imports.BotImportData, dryRun bo
 	if bot.UserId == "" {
 		var appErr *model.AppError
 		if savedBot, appErr = a.CreateBot(rctx, bot); appErr != nil {
-			var appErr *model.AppError
+			// CreateBot failed — check if it's because the user already exists.
+			// CreateBot wraps store.ErrInvalidInput inside a *model.AppError when
+			// the username is taken, so we unwrap via errors.As to detect this case.
+			// This can happen when a user with this username was created (e.g. by a
+			// previous partial import) but has no bot record yet.
 			var invErr *store.ErrInvalidInput
-			switch {
-			case errors.As(appErr, &invErr):
-				switch invErr.Field {
-				case "username":
-					return model.NewAppError("importUser", "app.user.save.username_exists.app_error", nil, "", http.StatusBadRequest).Wrap(appErr)
-				default:
-					return model.NewAppError("importUser", "app.user.save.existing.app_error", nil, "", http.StatusBadRequest).Wrap(appErr)
-				}
-			default:
+			if !errors.As(appErr, &invErr) || invErr.Field != "username" {
 				return appErr
+			}
+
+			rctx.Logger().Info("CreateBot failed with username conflict during import, recovering by linking existing user",
+				mlog.String("bot_username", *data.Username))
+
+			// The user already exists; look it up and create only the bot record.
+			existingUser, userErr := a.Srv().Store().User().GetByUsername(*data.Username)
+			if userErr != nil {
+				return model.NewAppError("importBot", "app.import.import_bot.user_not_found.error", nil, "", http.StatusInternalServerError).Wrap(userErr)
+			}
+			bot.UserId = existingUser.Id
+
+			rctx.Logger().Info("Found existing user for bot import recovery",
+				mlog.String("bot_username", *data.Username),
+				mlog.String("user_id", existingUser.Id))
+
+			// The existing user account is about to be linked to a bot
+			// record directly via the Store layer, bypassing the app-layer
+			// helpers that normally accompany this mutation. Revoke any
+			// sessions issued before this change and invalidate cached user
+			// data BEFORE that link is created (mirroring ConvertUserToBot,
+			// but reordered): if revocation fails, the bot record below is
+			// never created, so a retried import still hits this recovery
+			// branch and re-attempts revocation instead of silently
+			// skipping it because the bot record already exists.
+			if err := a.RevokeAllSessions(rctx, existingUser.Id); err != nil {
+				return err
+			}
+			a.InvalidateCacheForUser(existingUser.Id)
+
+			var saveErr error
+			savedBot, saveErr = a.Srv().Store().Bot().Save(bot)
+			if saveErr != nil {
+				// Bot().Save failed — this can happen if the bot record was
+				// concurrently created between the GetByUsername check at the
+				// top of this function and now (race condition). Fall back to
+				// updating the existing record.
+				rctx.Logger().Warn("Bot record save failed during import recovery, attempting update",
+					mlog.String("user_id", bot.UserId),
+					mlog.Err(saveErr))
+				var updateErr error
+				savedBot, updateErr = a.Srv().Store().Bot().Update(bot)
+				if updateErr != nil {
+					return model.NewAppError("importBot", "app.bot.update.internal_error", nil, "", http.StatusInternalServerError).Wrap(updateErr)
+				}
 			}
 		}
 	} else if hasBotChanged {
@@ -917,6 +977,23 @@ func (a *App) importBot(rctx request.CTX, data *imports.BotImportData, dryRun bo
 
 	if savedBot == nil {
 		savedBot = bot
+	}
+
+	// DisplayName is stored as Users.FirstName, not in the Bots table,
+	// so Bot().Update() alone doesn't persist it. Update the user record
+	// if the DisplayName has diverged.
+	if data.DisplayName != nil && savedBot.UserId != "" {
+		botUser, userErr := a.Srv().Store().User().Get(rctx.Context(), savedBot.UserId)
+		if userErr != nil {
+			rctx.Logger().Warn("Failed to fetch bot user for DisplayName update",
+				mlog.String("user_id", savedBot.UserId),
+				mlog.Err(userErr))
+		} else if botUser.FirstName != *data.DisplayName {
+			botUser.FirstName = *data.DisplayName
+			if _, appErr := a.UpdateUser(rctx, botUser, false); appErr != nil {
+				return appErr
+			}
+		}
 	}
 
 	if data.Avatar.ProfileImage != nil {
@@ -1065,7 +1142,7 @@ func (a *App) importUserTeams(rctx request.CTX, user *model.User, data *[]import
 			if appErr != nil {
 				return appErr
 			}
-			member.SchemeAdmin = userShouldBeAdmin
+			member.SchemeAdmin = member.SchemeAdmin || userShouldBeAdmin
 		}
 
 		if tdata.Channels != nil {
@@ -1116,12 +1193,13 @@ func (a *App) importUserTeams(rctx request.CTX, user *model.User, data *[]import
 
 	for _, member := range append(newMembers, oldMembers...) {
 		if member.ExplicitRoles != rolesByTeamID[member.TeamId] {
-			if _, appErr = a.UpdateTeamMemberRoles(rctx, member.TeamId, user.Id, rolesByTeamID[member.TeamId]); appErr != nil {
+			// Bulk import uses internal function to support two-phase role updates.
+			if _, appErr = a.updateTeamMemberRolesInternal(rctx, member.TeamId, user.Id, rolesByTeamID[member.TeamId], true); appErr != nil {
 				return appErr
 			}
 		}
 
-		if _, appErr := a.UpdateTeamMemberSchemeRoles(rctx, member.TeamId, user.Id, isGuestByTeamID[member.TeamId], isUserByTeamId[member.TeamId], isAdminByTeamID[member.TeamId]); appErr != nil {
+		if _, appErr := a.UpdateTeamMemberSchemeRoles(rctx, member.TeamId, user.Id, isGuestByTeamID[member.TeamId], isUserByTeamId[member.TeamId], member.SchemeAdmin || isAdminByTeamID[member.TeamId]); appErr != nil {
 			rctx.Logger().Warn("Error updating team member scheme roles", mlog.String("team_id", member.TeamId), mlog.String("user_id", user.Id), mlog.Err(appErr))
 		}
 	}
@@ -1308,7 +1386,8 @@ func (a *App) importUserChannels(rctx request.CTX, user *model.User, team *model
 
 	for _, member := range append(newMembers, oldMembers...) {
 		if member.ExplicitRoles != rolesByChannelId[member.ChannelId] {
-			if _, err = a.UpdateChannelMemberRoles(rctx, member.ChannelId, user.Id, rolesByChannelId[member.ChannelId]); err != nil {
+			// Bulk import uses internal function to support two-phase role updates.
+			if _, err = a.updateChannelMemberRolesInternal(rctx, member.ChannelId, user.Id, rolesByChannelId[member.ChannelId], true); err != nil {
 				return err
 			}
 		}

@@ -19,7 +19,7 @@ import Carousel from 'components/common/carousel/carousel';
 import useOpenInvitePeopleModal from 'components/common/hooks/useOpenInvitePeopleModal';
 import GuestAccessSvg from 'components/common/svg_images_components/guest_access_svg';
 import MonitorImacLikeSVG from 'components/common/svg_images_components/monitor_imaclike_svg';
-import PersonWithChecklistSvg from 'components/common/svg_images_components/person_with_checklist';
+import PersonWithChecklistSvg from 'components/common/svg_images_components/person_with_checklist_svg';
 import SuccessSvg from 'components/common/svg_images_components/success_svg';
 
 import {ConsolePages, DocLinks, ModalIdentifiers} from 'utils/constants';
@@ -144,7 +144,7 @@ const TrialBenefitsModal = ({
                     id='trial_benefits.modal.trialStartedDescriptionBody'
                     defaultMessage='You now have access to <guestAccountsLink>guest accounts</guestAccountsLink>, <autoComplianceReportsLink>automated compliance reports</autoComplianceReportsLink>, and <mobileSecureNotificationsLink>mobile secure-ID push notifications</mobileSecureNotificationsLink>, among many other features.'
                     values={{
-                        guestAccountsLink: (text: string) => (
+                        guestAccountsLink: (text) => (
                             <BlockableLink
                                 to={ConsolePages.GUEST_ACCOUNTS}
                                 onClick={handleOnClose}
@@ -152,7 +152,7 @@ const TrialBenefitsModal = ({
                                 {text}
                             </BlockableLink>
                         ),
-                        autoComplianceReportsLink: (text: string) => (
+                        autoComplianceReportsLink: (text) => (
                             <BlockableLink
                                 to={ConsolePages.COMPLIANCE_EXPORT}
                                 onClick={handleOnClose}
@@ -160,7 +160,7 @@ const TrialBenefitsModal = ({
                                 {text}
                             </BlockableLink>
                         ),
-                        mobileSecureNotificationsLink: (text: string) => (
+                        mobileSecureNotificationsLink: (text) => (
                             <BlockableLink
                                 to={ConsolePages.PUSH_NOTIFICATION_CENTER}
                                 onClick={handleOnClose}
