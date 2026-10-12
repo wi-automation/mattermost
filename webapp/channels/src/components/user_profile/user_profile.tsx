@@ -23,6 +23,7 @@ export default function UserProfile({
     disablePopover = false,
     displayUsername = false,
     hideStatus = false,
+    hideBotTag = false,
     overwriteName = '',
     colorize = false,
     user,
@@ -99,7 +100,7 @@ export default function UserProfile({
                 remoteNames={remoteNames}
             />
             }
-            {(user && user.is_bot) && <BotTag/>}
+            {(user && user.is_bot && !hideBotTag) && <BotTag/>}
             {(user && isGuest(user.roles)) && <GuestTag/>}
         </>
     );

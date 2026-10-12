@@ -26,6 +26,7 @@ export type OwnProps = {
     displayUsername?: boolean;
     colorize?: boolean;
     hideStatus?: boolean;
+    hideBotTag?: boolean;
     channelId?: Channel['id'];
 }
 

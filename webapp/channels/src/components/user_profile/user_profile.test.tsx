@@ -8,6 +8,9 @@ import type {UserProfile as UserProfileType} from '@mattermost/types/users';
 
 import {Preferences} from 'mattermost-redux/constants';
 
+import ProfilePopover from 'components/profile_popover';
+import BotTag from 'components/widgets/tag/bot_tag';
+
 import UserProfile from './user_profile';
 
 describe('components/UserProfile', () => {
@@ -29,6 +32,32 @@ describe('components/UserProfile', () => {
     test('should match snapshot', () => {
         const wrapper = shallow(<UserProfile {...baseProps}/>);
         expect(wrapper).toMatchSnapshot();
+    });
+
+    test('keeps bot badges outside message headers by default', () => {
+        const user = {...baseProps.user, is_bot: true};
+        const wrapper = shallow(
+            <UserProfile
+                {...baseProps}
+                user={user}
+            />,
+        );
+
+        expect(wrapper.find(BotTag)).toHaveLength(1);
+    });
+
+    test('hides a bot badge when requested by a message header', () => {
+        const user = {...baseProps.user, is_bot: true};
+        const wrapper = shallow(
+            <UserProfile
+                {...baseProps}
+                user={user}
+                hideBotTag={true}
+            />,
+        );
+
+        expect(wrapper.find(BotTag)).toHaveLength(0);
+        expect(wrapper.find(ProfilePopover).prop('children')).toBe('nickname');
     });
 
     test('should match snapshot, with colorization', () => {

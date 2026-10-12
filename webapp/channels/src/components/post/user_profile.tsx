@@ -11,7 +11,6 @@ import {ensureString} from 'mattermost-redux/utils/post_utils';
 
 import PostHeaderCustomStatus from 'components/post_view/post_header_custom_status/post_header_custom_status';
 import UserProfile from 'components/user_profile';
-import BotTag from 'components/widgets/tag/bot_tag';
 import Tag from 'components/widgets/tag/tag';
 
 import {fromAutoResponder, isFromWebhook} from 'utils/post_utils';
@@ -52,6 +51,7 @@ const PostUserProfile = (props: Props): JSX.Element | null => {
     if (compactDisplay || isMobileView) {
         userProfile = (
             <UserProfile
+                hideBotTag={true}
                 userId={post.user_id}
                 channelId={post.channel_id}
                 colorize={colorize}
@@ -62,6 +62,7 @@ const PostUserProfile = (props: Props): JSX.Element | null => {
     if (isConsecutivePost) {
         userProfile = (
             <UserProfile
+                hideBotTag={true}
                 userId={post.user_id}
                 channelId={post.channel_id}
                 colorize={colorize}
@@ -70,6 +71,7 @@ const PostUserProfile = (props: Props): JSX.Element | null => {
     } else {
         userProfile = (
             <UserProfile
+                hideBotTag={true}
                 userId={post.user_id}
                 channelId={post.channel_id}
                 colorize={colorize}
@@ -83,6 +85,7 @@ const PostUserProfile = (props: Props): JSX.Element | null => {
             const overwriteIcon = propOverrideIcon || undefined;
             userProfile = (
                 <UserProfile
+                    hideBotTag={true}
                     userId={post.user_id}
                     channelId={post.channel_id}
                     hideStatus={true}
@@ -91,16 +94,11 @@ const PostUserProfile = (props: Props): JSX.Element | null => {
                     overwriteIcon={overwriteIcon}
                 />
             );
-
-            // user profile component checks and add bot tag in case webhook is from bot account, but if webhook is from user account we need this.
-
-            if (!isBot) {
-                botIndicator = (<BotTag/>);
-            }
         } else if (isFromAutoResponder) {
             userProfile = (
                 <span className='auto-responder'>
                     <UserProfile
+                        hideBotTag={true}
                         userId={post.user_id}
                         channelId={post.channel_id}
                         hideStatus={true}
@@ -121,6 +119,7 @@ const PostUserProfile = (props: Props): JSX.Element | null => {
         } else if (isSystemMessage && isBot) {
             userProfile = (
                 <UserProfile
+                    hideBotTag={true}
                     userId={post.user_id}
                     channelId={post.channel_id}
                     hideStatus={true}
@@ -134,6 +133,7 @@ const PostUserProfile = (props: Props): JSX.Element | null => {
                         id: 'post_info.system',
                         defaultMessage: 'System',
                     })}
+                    hideBotTag={true}
                     userId={post.user_id}
                     disablePopover={true}
                     channelId={post.channel_id}
