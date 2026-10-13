@@ -723,4 +723,56 @@ describe('PostComponent', () => {
             expect(screen.getByLabelText('Message posted by @aibot')).toBeInTheDocument();
         });
     });
+
+    describe('chat bubbles', () => {
+        test('shows an own bubble with its timestamp below the message', () => {
+            const post = TestHelper.getPostMock({
+                channel_id: channel.id,
+                type: '',
+                user_id: baseProps.currentUserId,
+            });
+            const {container} = renderWithContext(
+                <PostComponent
+                    {...baseProps}
+                    post={post}
+                />,
+            );
+
+            expect(container.querySelector('.post')).toHaveClass('post--bubble', 'post--bubble-own');
+            expect(container.querySelector('.post__bubble .post__bubble-time .post__time')).toBeInTheDocument();
+            expect(container.querySelector('.post__header .post__time')).not.toBeInTheDocument();
+        });
+
+        test('keeps webhook messages on the incoming side', () => {
+            const post = TestHelper.getPostMock({
+                channel_id: channel.id,
+                type: '',
+                user_id: baseProps.currentUserId,
+                props: {from_webhook: 'true'},
+            });
+            const {container} = renderWithContext(
+                <PostComponent
+                    {...baseProps}
+                    post={post}
+                />,
+            );
+
+            expect(container.querySelector('.post')).toHaveClass('post--bubble');
+            expect(container.querySelector('.post')).not.toHaveClass('post--bubble-own');
+        });
+
+        test('does not add bubbles to the thread view', () => {
+            const post = TestHelper.getPostMock({channel_id: channel.id, type: ''});
+            const {container} = renderWithContext(
+                <PostComponent
+                    {...baseProps}
+                    post={post}
+                    location={Locations.RHS_ROOT}
+                />,
+            );
+
+            expect(container.querySelector('.post')).not.toHaveClass('post--bubble');
+            expect(container.querySelector('.post__bubble-time')).not.toBeInTheDocument();
+        });
+    });
 });

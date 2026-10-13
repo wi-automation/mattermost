@@ -167,6 +167,8 @@ function PostComponent(props: Props) {
 
     const isSystemMessage = PostUtils.isSystemMessage(post);
     const fromAutoResponder = PostUtils.fromAutoResponder(post);
+    const useChatBubbles = props.location === Locations.CENTER && !isSearchResultItem && !isSystemMessage && !checkIsMeMessage(post);
+    const isOwnChatBubble = useChatBubbles && props.currentUserId === post.user_id && !props.isBot && !PostUtils.isFromWebhook(post) && !PostUtils.isFromBot(post) && !fromAutoResponder;
 
     useEffect(() => {
         if (shouldHighlight) {
@@ -312,6 +314,8 @@ function PostComponent(props: Props) {
         const hovered =
             hover || fileDropdownOpened || dropdownOpened || a11yActive || props.isPostBeingEdited;
         return classNames('a11y__section post', {
+            'post--bubble': useChatBubbles,
+            'post--bubble-own': isOwnChatBubble,
             'post--highlight': shouldHighlight && !fadeOutHighlight,
             'same--root': hasSameRoot(props),
             'other--root': !hasSameRoot(props) && !isSystemMessage,
@@ -792,7 +796,7 @@ function PostComponent(props: Props) {
                     <div className='post__img'>
                         {profilePic}
                     </div>
-                    <div>
+                    <div className={useChatBubbles ? 'post__bubble' : undefined}>
                         <div
                             className='post__header'
                             ref={postHeaderRef}
@@ -802,7 +806,7 @@ function PostComponent(props: Props) {
                                 isSystemMessage={isSystemMessage}
                             />
                             <div className='badges-wrapper col d-flex align-items-center'>
-                                {((!hideProfilePicture && props.location === Locations.CENTER) || hover || props.location !== Locations.CENTER) &&
+                                {!useChatBubbles && ((!hideProfilePicture && props.location === Locations.CENTER) || hover || props.location !== Locations.CENTER) &&
                                     <PostTime
                                         isPermalink={!(Posts.POST_DELETED === post.state || isPostPendingOrFailed(post))}
                                         teamName={props.team?.name}
@@ -907,6 +911,18 @@ function PostComponent(props: Props) {
                             </div>
                             {threadFooter}
                         </div>
+                        {useChatBubbles &&
+                            <div className='post__bubble-time'>
+                                <PostTime
+                                    isPermalink={!(Posts.POST_DELETED === post.state || isPostPendingOrFailed(post))}
+                                    teamName={props.team?.name}
+                                    eventTime={post.create_at}
+                                    postId={post.id}
+                                    location={props.location}
+                                    timestampProps={props.timestampProps}
+                                />
+                            </div>
+                        }
                     </div>
                 </div>
             </PostAriaLabelDiv>
