@@ -1,11 +1,13 @@
 // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 // See LICENSE.txt for license information.
 
+import {autoUpdate, flip, offset, shift, useFloating} from '@floating-ui/react';
 import classnames from 'classnames';
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import type {ReactNode} from 'react';
-import {FormattedMessage} from 'react-intl';
+import {FormattedMessage, useIntl} from 'react-intl';
 
+import {DotsHorizontalIcon} from '@mattermost/compass-icons/components';
 import type {Emoji} from '@mattermost/types/emojis';
 import type {Post} from '@mattermost/types/posts';
 
@@ -61,14 +63,64 @@ type Props = {
 };
 
 const PostOptions = (props: Props): JSX.Element => {
+    const {formatMessage} = useIntl();
+    const [showToolbar, setShowToolbar] = useState(false);
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [showDotMenu, setShowDotMenu] = useState(false);
     const [showActionsMenu, setShowActionsMenu] = useState(false);
+    const toolbarRef = useRef<HTMLDivElement>(null);
+    const triggerRef = useRef<HTMLButtonElement | null>(null);
+    const nestedMenuOpen = showEmojiPicker || showDotMenu || showActionsMenu;
+    const toolbarOpen = showToolbar || nestedMenuOpen;
+    const wasToolbarOpen = useRef(false);
+    const {handleDropdownOpened} = props;
+    const {refs, floatingStyles} = useFloating({
+        open: toolbarOpen,
+        placement: 'top-end',
+        strategy: 'fixed',
+        middleware: [offset(4), flip(), shift({padding: 8})],
+        whileElementsMounted: autoUpdate,
+    });
+
+    useEffect(() => {
+        if (wasToolbarOpen.current !== toolbarOpen) {
+            wasToolbarOpen.current = toolbarOpen;
+            handleDropdownOpened?.(toolbarOpen);
+        }
+    }, [toolbarOpen, handleDropdownOpened]);
+
+    useEffect(() => {
+        if (!showToolbar || nestedMenuOpen) {
+            return undefined;
+        }
+
+        const handleOutsideClick = (event: MouseEvent | FocusEvent) => {
+            if (!toolbarRef.current?.contains(event.target as Node)) {
+                setShowToolbar(false);
+            }
+        };
+        const handleEscape = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                setShowToolbar(false);
+                triggerRef.current?.focus();
+            }
+        };
+
+        document.addEventListener('mousedown', handleOutsideClick);
+        document.addEventListener('focusin', handleOutsideClick);
+        document.addEventListener('keydown', handleEscape, true);
+        return () => {
+            document.removeEventListener('mousedown', handleOutsideClick);
+            document.removeEventListener('focusin', handleOutsideClick);
+            document.removeEventListener('keydown', handleEscape, true);
+        };
+    }, [showToolbar, nestedMenuOpen]);
 
     const toggleEmojiPicker = useCallback((show: boolean) => {
         setShowEmojiPicker(show);
-        props.handleDropdownOpened!(show);
-    }, [props.handleDropdownOpened]);
+    }, []);
 
     const lastEmittedFrom = useRef(props.shortcutReactToLastPostEmittedFrom);
     useEffect(() => {
@@ -110,16 +162,15 @@ const PostOptions = (props: Props): JSX.Element => {
 
     const handleDotMenuOpened = (open: boolean) => {
         setShowDotMenu(open);
-        props.handleDropdownOpened!(open);
     };
 
     const handleActionsMenuOpened = (open: boolean) => {
         setShowActionsMenu(open);
-        props.handleDropdownOpened!(open);
     };
 
     const isPostDeleted = post && post.state === Posts.POST_DELETED;
-    const hoverLocal = props.hover || showEmojiPicker || showDotMenu || showActionsMenu;
+    const hoverLocal = props.hover || toolbarOpen;
+    const useToolbarToggle = !isMobileView && !systemMessage;
     const showCommentIcon = isFromAutoResponder || (!systemMessage && (isMobileView ||
             hoverLocal || (!post.root_id && Boolean(props.hasReplies)) ||
             props.isFirstReply) && props.location === Locations.CENTER);
@@ -287,6 +338,9 @@ const PostOptions = (props: Props): JSX.Element => {
     } else if (!props.isPostBeingEdited) {
         options = (
             <ul
+                ref={useToolbarToggle ? refs.setFloating : undefined}
+                style={useToolbarToggle ? {...floatingStyles, right: 'auto'} : undefined}
+                id={useToolbarToggle ? `${props.location}_post-actions_${post.id}` : undefined}
                 data-testid={`post-menu-${props.post.id}`}
                 className={classnames('col post-menu', {'post-menu--position': !hoverLocal && showCommentIcon})}
             >
@@ -300,6 +354,38 @@ const PostOptions = (props: Props): JSX.Element => {
                 {(collapsedThreadsEnabled || showRecentlyUsedReactions) && dotMenu}
             </ul>
         );
+
+        if (useToolbarToggle) {
+            const label = formatMessage({id: 'post_info.menuAriaLabel', defaultMessage: 'Post extra options'});
+            options = (
+                <div
+                    className='post-actions'
+                    ref={toolbarRef}
+                >
+                    <button
+                        ref={(node) => {
+                            triggerRef.current = node;
+                            refs.setReference(node);
+                        }}
+                        type='button'
+                        className='post-menu__item post-actions__toggle'
+                        aria-label={label}
+                        aria-expanded={toolbarOpen}
+                        aria-controls={toolbarOpen ? `${props.location}_post-actions_${post.id}` : undefined}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            setShowToolbar(!toolbarOpen);
+                            setShowEmojiPicker(false);
+                            setShowDotMenu(false);
+                            setShowActionsMenu(false);
+                        }}
+                    >
+                        <DotsHorizontalIcon size={16}/>
+                    </button>
+                    {toolbarOpen && options}
+                </div>
+            );
+        }
     }
 
     return <>{options}</>;

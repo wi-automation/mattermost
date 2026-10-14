@@ -9,7 +9,8 @@ import type {DeepPartial} from '@mattermost/types/utilities';
 import {Posts} from 'mattermost-redux/constants';
 
 import mergeObjects from 'packages/mattermost-redux/test/merge_objects';
-import {renderWithContext, screen, userEvent} from 'tests/react_testing_utils';
+import {act, fireEvent, renderWithContext, screen, userEvent, waitFor} from 'tests/react_testing_utils';
+import a11y from 'utils/a11y_controller_instance';
 import {getHistory} from 'utils/browser_history';
 import {Locations} from 'utils/constants';
 import {TestHelper} from 'utils/test_helper';
@@ -52,6 +53,84 @@ describe('PostComponent', () => {
             setRhsExpanded: jest.fn(),
         },
     };
+
+    describe('message actions toggle', () => {
+        afterEach(() => {
+            act(() => a11y.cancelNavigation());
+        });
+
+        const props: Props = {
+            ...baseProps,
+            post: TestHelper.getPostMock({channel_id: channel.id, type: ''}),
+        };
+
+        test('reveals the existing actions only after clicking the corner button', async () => {
+            renderWithContext(<PostComponent {...props}/>);
+
+            const toggle = screen.getByRole('button', {name: 'Post extra options'});
+            fireEvent.mouseOver(screen.getByTestId('postView'));
+            expect(screen.queryByTestId(`post-menu-${props.post.id}`)).not.toBeInTheDocument();
+
+            userEvent.click(toggle);
+            expect(toggle).toHaveAttribute('aria-expanded', 'true');
+            expect(screen.getByTestId(`post-menu-${props.post.id}`)).toBeInTheDocument();
+            expect(screen.getByTestId(`PostDotMenu-Button-${props.post.id}`)).toBeInTheDocument();
+            await waitFor(() => expect(screen.getByTestId(`post-menu-${props.post.id}`)).toHaveStyle({position: 'fixed'}));
+
+            fireEvent.mouseLeave(screen.getByTestId('postView'));
+            expect(toggle).toHaveAttribute('aria-expanded', 'true');
+            userEvent.click(toggle);
+            expect(toggle).toHaveAttribute('aria-expanded', 'false');
+            expect(screen.queryByTestId(`post-menu-${props.post.id}`)).not.toBeInTheDocument();
+        });
+
+        test('closes on an outside click and restores focus on Escape', () => {
+            renderWithContext(<PostComponent {...props}/>);
+            const toggle = screen.getByRole('button', {name: 'Post extra options'});
+
+            userEvent.click(toggle);
+            userEvent.click(document.body);
+            expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+            userEvent.click(toggle);
+            act(() => screen.getByTestId(`PostDotMenu-Button-${props.post.id}`).focus());
+            fireEvent.keyDown(document.activeElement!, {key: 'Escape'});
+            expect(toggle).toHaveAttribute('aria-expanded', 'false');
+            expect(toggle).toHaveFocus();
+        });
+
+        test('keeps the toolbar mounted while its extra-options menu is open', async () => {
+            renderWithContext(<PostComponent {...props}/>);
+            const toggle = screen.getByRole('button', {name: 'Post extra options'});
+            userEvent.click(toggle);
+            userEvent.click(screen.getByTestId(`PostDotMenu-Button-${props.post.id}`));
+
+            const menu = await screen.findByRole('menu', {name: 'Post extra options'});
+            fireEvent.mouseDown(menu);
+            expect(toggle).toHaveAttribute('aria-expanded', 'true');
+            expect(screen.getByTestId(`post-menu-${props.post.id}`)).toBeInTheDocument();
+        });
+
+        test('keeps the existing controls on mobile and in search results', () => {
+            const {rerender} = renderWithContext(
+                <PostComponent
+                    {...props}
+                    isMobileView={true}
+                />,
+            );
+            expect(screen.queryByRole('button', {name: 'Post extra options'})).not.toBeInTheDocument();
+            expect(screen.getByTestId(`PostDotMenu-Button-${props.post.id}`)).toBeInTheDocument();
+
+            rerender(
+                <PostComponent
+                    {...props}
+                    location={Locations.SEARCH}
+                />,
+            );
+            expect(screen.queryByRole('button', {name: 'Post extra options'})).not.toBeInTheDocument();
+            expect(screen.getByTestId(`PostDotMenu-Button-${props.post.id}`)).toBeInTheDocument();
+        });
+    });
 
     describe('reactions', () => {
         const baseState: DeepPartial<GlobalState> = {

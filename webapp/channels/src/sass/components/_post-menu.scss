@@ -72,6 +72,35 @@
     cursor: pointer;
 }
 
+.post-actions {
+    position: absolute;
+    z-index: 6;
+    top: 0;
+    right: 0;
+
+    .post-menu {
+        width: max-content;
+        max-width: calc(100vw - 16px);
+        flex-wrap: wrap;
+        border-color: rgba(var(--center-channel-color-rgb), 0.2);
+        background-color: functions.v(center-channel-bg);
+        box-shadow: variables.$elevation-1;
+    }
+}
+
+.post .post-actions .post-menu__item {
+    display: inline-flex;
+    visibility: visible;
+}
+
+.post .post__content:has(.post-actions) {
+    padding-right: 36px;
+}
+
+.post.post--hide-controls .post-actions {
+    display: none;
+}
+
 @media (min-width: 768px) {
     .post-menu__item {
         display: none;

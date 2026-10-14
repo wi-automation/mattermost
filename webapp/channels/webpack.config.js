@@ -434,6 +434,20 @@ if (targetIsDevServer) {
         devtool: 'eval-cheap-module-source-map',
         devServer: {
             liveReload: true,
+            client: {
+                overlay: {
+                    errors: true,
+
+                    // Keep Sass migration warnings in the console without blocking local UI testing.
+                    warnings: (warning) => {
+                        const message = typeof warning === 'string' ? warning : warning.message;
+                        return !(
+                            message.includes('sass-loader') &&
+                            (/Deprecation Warning|deprecation warnings omitted/).test(message)
+                        );
+                    },
+                },
+            },
             proxy: [
                 {
                     context: '/api',
