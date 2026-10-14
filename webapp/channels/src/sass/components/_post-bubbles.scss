@@ -1,0 +1,212 @@
+// Chat bubbles apply only when the post component marks a center-channel message.
+.post.post--bubble {
+    padding: 18px 24px 0;
+
+    > .post__content {
+        display: flex;
+        width: 100%;
+        align-items: flex-start;
+        padding: 0;
+        gap: 10px;
+
+        > .post__img {
+            display: block;
+            width: 32px;
+            flex: 0 0 32px;
+            padding: 3px 0 0;
+            margin: 0;
+        }
+    }
+
+    .post__bubble {
+        position: relative;
+        width: fit-content;
+        min-width: 180px;
+        max-width: min(75%, calc(100% - 42px));
+        padding: 10px 13px 7px;
+        border: 1px solid rgba(var(--center-channel-color-rgb), 0.1);
+        border-radius: 3px 12px 12px;
+        background: rgba(var(--center-channel-color-rgb), 0.06);
+        overflow-wrap: anywhere;
+
+        > .post__header {
+            position: relative;
+            width: 100%;
+            height: auto;
+            min-height: 0;
+            max-height: none;
+            padding: 0;
+            margin: 0 0 6px;
+            float: none;
+
+            > .col__name {
+                color: var(--link-color);
+                font-size: 12px;
+            }
+
+            .colon {
+                display: none;
+            }
+
+            .post-menu {
+                top: -28px;
+                right: -8px;
+            }
+        }
+
+        // Reserve a corner for the collapsed actions without covering message text.
+        &:has(.post-actions) {
+            padding-right: 45px;
+
+            > .post__header .post-actions {
+                top: -3px;
+                right: -36px;
+            }
+
+            > .post__bubble-time {
+                margin-right: -32px;
+            }
+        }
+
+        > .post__body {
+            min-width: 0;
+        }
+
+        .post__bubble-time {
+            margin-top: 5px;
+            text-align: right;
+
+            .post__permalink,
+            .post__time {
+                position: static;
+                display: inline-block;
+                width: auto;
+                height: auto;
+                padding: 0;
+                float: none;
+                font-size: 11px;
+                line-height: 16px;
+                opacity: 1;
+            }
+
+            .post__time {
+                color: rgba(var(--center-channel-color-rgb), 0.72);
+            }
+        }
+    }
+
+    &.post--bubble-own {
+        > .post__content {
+            justify-content: flex-end;
+
+            > .post__img {
+                display: none;
+            }
+        }
+
+        .post__bubble {
+            border-color: rgba(var(--button-bg-rgb), 0.3);
+            border-radius: 12px 3px 12px 12px;
+            background: rgba(var(--button-bg-rgb), 0.16);
+        }
+
+        .post__header > .col__name {
+            display: none;
+        }
+    }
+
+    &.same--root.same--user {
+        padding: 5px 24px 0;
+
+        .post__bubble {
+            border-radius: 12px;
+
+            > .post__header {
+                height: auto;
+                padding: 0;
+                margin: 0;
+                float: none;
+
+                .col__name {
+                    display: none;
+                }
+
+                .post-menu {
+                    top: -28px;
+                }
+            }
+
+            .post__bubble-time .post__time {
+                opacity: 1;
+            }
+
+            // Override the later tablet positioning for consecutive timestamps.
+            .post__bubble-time .post__permalink {
+                position: static;
+                width: auto;
+            }
+        }
+    }
+
+    &.post--compact {
+        padding: 18px 24px 0;
+
+        > .post__content {
+            padding: 0;
+
+            > .post__img {
+                display: none;
+            }
+        }
+    }
+
+    &.post--editing .post__bubble {
+        width: 100%;
+        max-width: calc(100% - 42px);
+    }
+}
+
+@media screen and (max-width: 768px) {
+    .post.post--bubble {
+        padding-right: 12px;
+        padding-left: 12px;
+
+        &.same--root.same--user,
+        &.post--compact {
+            padding-right: 12px;
+            padding-left: 12px;
+        }
+
+        .post__bubble {
+            min-width: 0;
+            max-width: calc(100% - 42px);
+            padding: 9px 11px 6px;
+
+            > .post__header {
+                min-height: 20px;
+                padding-right: 56px;
+
+                .post-menu {
+                    top: -6px;
+                }
+            }
+        }
+
+        &.same--root.same--user .post__bubble > .post__header {
+            min-height: 20px;
+            padding-right: 56px;
+
+            .post-menu {
+                top: -6px;
+            }
+        }
+
+        &.post--bubble-own .post__bubble {
+            max-width: 87%;
+        }
+
+        &.post--editing .post__bubble {
+            max-width: calc(100% - 42px);
+        }
+    }
+}

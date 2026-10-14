@@ -93,7 +93,7 @@
     visibility: visible;
 }
 
-.post .post__content:has(.post-actions) {
+.post:not(.post--bubble) .post__content:has(.post-actions) {
     padding-right: 36px;
 }
 

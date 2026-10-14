@@ -55,8 +55,8 @@ describe('PostComponent', () => {
     };
 
     describe('message actions toggle', () => {
-        afterEach(() => {
-            act(() => a11y.cancelNavigation());
+        afterEach(async () => {
+            await act(async () => a11y.cancelNavigation());
         });
 
         const props: Props = {
@@ -71,7 +71,7 @@ describe('PostComponent', () => {
             fireEvent.mouseOver(screen.getByTestId('postView'));
             expect(screen.queryByTestId(`post-menu-${props.post.id}`)).not.toBeInTheDocument();
 
-            userEvent.click(toggle);
+            await act(async () => userEvent.click(toggle));
             expect(toggle).toHaveAttribute('aria-expanded', 'true');
             expect(screen.getByTestId(`post-menu-${props.post.id}`)).toBeInTheDocument();
             expect(screen.getByTestId(`PostDotMenu-Button-${props.post.id}`)).toBeInTheDocument();
@@ -79,22 +79,24 @@ describe('PostComponent', () => {
 
             fireEvent.mouseLeave(screen.getByTestId('postView'));
             expect(toggle).toHaveAttribute('aria-expanded', 'true');
-            userEvent.click(toggle);
+            await act(async () => userEvent.click(toggle));
             expect(toggle).toHaveAttribute('aria-expanded', 'false');
             expect(screen.queryByTestId(`post-menu-${props.post.id}`)).not.toBeInTheDocument();
         });
 
-        test('closes on an outside click and restores focus on Escape', () => {
+        test('closes on an outside click and restores focus on Escape', async () => {
             renderWithContext(<PostComponent {...props}/>);
             const toggle = screen.getByRole('button', {name: 'Post extra options'});
 
-            userEvent.click(toggle);
-            userEvent.click(document.body);
+            await act(async () => userEvent.click(toggle));
+            await act(async () => userEvent.click(document.body));
             expect(toggle).toHaveAttribute('aria-expanded', 'false');
 
-            userEvent.click(toggle);
-            act(() => screen.getByTestId(`PostDotMenu-Button-${props.post.id}`).focus());
-            fireEvent.keyDown(document.activeElement!, {key: 'Escape'});
+            await act(async () => userEvent.click(toggle));
+            await act(async () => screen.getByTestId(`PostDotMenu-Button-${props.post.id}`).focus());
+            await act(async () => {
+                fireEvent.keyDown(document.activeElement!, {key: 'Escape'});
+            });
             expect(toggle).toHaveAttribute('aria-expanded', 'false');
             expect(toggle).toHaveFocus();
         });
@@ -627,6 +629,68 @@ describe('PostComponent', () => {
             renderWithContext(<PostComponent {...props}/>);
 
             expect(screen.queryByTestId('post-priority-label')).not.toBeInTheDocument();
+        });
+    });
+
+    describe('chat bubbles', () => {
+        test.each([
+            {},
+            {isConsecutivePost: true},
+            {compactDisplay: true},
+            {isMobileView: true, isConsecutivePost: true},
+        ])('keeps the timestamp inside an own bubble for layout %j', (layout) => {
+            const post = TestHelper.getPostMock({
+                channel_id: channel.id,
+                type: '',
+                user_id: baseProps.currentUserId,
+            });
+            const {container} = renderWithContext(
+                <PostComponent
+                    {...baseProps}
+                    post={post}
+                    {...layout}
+                />,
+            );
+
+            expect(container.querySelector('.post')).toHaveClass('post--bubble', 'post--bubble-own');
+            expect(container.querySelector('.post__bubble .post__bubble-time .post__time')).toBeInTheDocument();
+            expect(container.querySelector('.post__header .post__time')).not.toBeInTheDocument();
+        });
+
+        test.each([
+            {isBot: false, postProps: {from_webhook: 'true'}},
+            {isBot: true, postProps: {}},
+        ])('keeps automated messages on the incoming side: %j', ({isBot, postProps}) => {
+            const post = TestHelper.getPostMock({
+                channel_id: channel.id,
+                type: '',
+                user_id: baseProps.currentUserId,
+                props: postProps,
+            });
+            const {container} = renderWithContext(
+                <PostComponent
+                    {...baseProps}
+                    post={post}
+                    isBot={isBot}
+                />,
+            );
+
+            expect(container.querySelector('.post')).toHaveClass('post--bubble');
+            expect(container.querySelector('.post')).not.toHaveClass('post--bubble-own');
+        });
+
+        test.each([Locations.RHS_ROOT, Locations.RHS_COMMENT, Locations.SEARCH])('does not add bubbles to %s', (location) => {
+            const post = TestHelper.getPostMock({channel_id: channel.id, type: ''});
+            const {container} = renderWithContext(
+                <PostComponent
+                    {...baseProps}
+                    post={post}
+                    location={location}
+                />,
+            );
+
+            expect(container.querySelector('.post')).not.toHaveClass('post--bubble');
+            expect(container.querySelector('.post__bubble-time')).not.toBeInTheDocument();
         });
     });
 });
